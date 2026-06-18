@@ -1,25 +1,33 @@
-"""
-Pydantic models for AI service input/output payloads.
+from datetime import datetime
+from pydantic import BaseModel, Field
 
-All data flowing to and from AI services (Gemma, or any future replacement)
-must be validated through Pydantic models defined in this file.
 
-This ensures:
-- Strict input validation before sending to AI
-- Structured output parsing from AI responses
-- Type safety across the AI integration boundary
-"""
+class FeedingLogInput(BaseModel):
+    type: str  # breast, bottle, pumping
+    start_time: datetime
+    duration_minutes: int
+    quantity_ml: float | None = None
+    notes: str | None = None
 
-# TODO: Define AI request/response schemas when AI features are implemented.
-# Example:
-#
-# from pydantic import BaseModel
-#
-# class AIInsightRequest(BaseModel):
-#     baby_id: str
-#     data_type: str
-#     context: dict
-#
-# class AIInsightResponse(BaseModel):
-#     insight: str
-#     confidence: float
+
+class SleepLogInput(BaseModel):
+    sleep_start: datetime
+    sleep_end: datetime | None = None
+    duration_minutes: int | None = None
+    tracking_method: str
+    notes: str | None = None
+
+
+class AIInsightRequest(BaseModel):
+    baby_name: str
+    birth_date: str
+    gender: str
+    feedings: list[FeedingLogInput] = []
+    sleep_sessions: list[SleepLogInput] = []
+
+
+class AIInsightResponse(BaseModel):
+    summary: str = Field(description="A friendly, personalized 2-3 sentence overview of the baby's status.")
+    feeding_insights: str = Field(description="Analysis of feeding logs, patterns, or gaps.")
+    sleep_insights: str = Field(description="Analysis of sleeping cycles, duration, and patterns.")
+    recommendations: list[str] = Field(description="List of 3 actionable parenting recommendations based on the logs.")

@@ -27,12 +27,16 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
-def initialize_firebase_app() -> firebase_admin.App:
+def initialize_firebase_app() -> firebase_admin.App | None:
     """Initialize the default Firebase app once and return it."""
     try:
         return firebase_admin.get_app()
     except ValueError:
         pass
+
+    if not settings.firebase_project_id and not settings.firebase_service_account_key_path:
+        logger.warning("Firebase credentials not configured. Firebase admin SDK will not be initialized.")
+        return None
 
     options = (
         {"projectId": settings.firebase_project_id}
@@ -42,16 +46,21 @@ def initialize_firebase_app() -> firebase_admin.App:
     key_path = settings.firebase_service_account_key_path
 
     if not key_path:
-        return firebase_admin.initialize_app(options=options)
+        try:
+            return firebase_admin.initialize_app(options=options)
+        except Exception as exc:
+            logger.warning(f"Could not initialize Firebase App with default credentials: {exc}")
+            return None
 
     service_account_path = Path(key_path).expanduser()
     if not service_account_path.is_absolute():
         service_account_path = Path(__file__).resolve().parents[2] / service_account_path
 
     if not service_account_path.is_file():
-        raise RuntimeError(
-            f"Firebase service account file not found: {service_account_path}"
+        logger.warning(
+            f"Firebase service account file not found: {service_account_path}. Skipping initialization."
         )
+        return None
 
     credential = credentials.Certificate(str(service_account_path))
     return firebase_admin.initialize_app(credential, options=options)
@@ -72,9 +81,26 @@ async def get_current_firebase_uid(
     Verify the Firebase ID token and return the user's Firebase UID.
 
     Raises HTTPException 401 if the token is invalid or expired.
+    Bypasses authentication only when an explicit "mock-token" is provided
+    and Firebase is not fully configured (local dev mode).
     """
     if bearer_credentials is None:
         raise _unauthorized("Bearer token is required")
+
+    token = bearer_credentials.credentials
+
+    # Allow mock-token bypass ONLY when Firebase is not configured (local dev)
+    firebase_configured = bool(
+        settings.firebase_project_id or settings.firebase_service_account_key_path
+    )
+    if token == "mock-token" and not firebase_configured:
+        return "mock-user-uid"
+
+    if not firebase_configured:
+        raise _unauthorized(
+            "Firebase is not configured and the provided token is not a valid mock-token"
+        )
+
 
     try:
         decoded_token = await run_in_threadpool(

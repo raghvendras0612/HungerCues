@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     gemma_api_url: str = "http://localhost:8080"
     gemma_api_key: str = ""
 
+    # Gemini AI Service
+    gemini_api_key: str = ""
+
+
     # App
     environment: str = "development"
 

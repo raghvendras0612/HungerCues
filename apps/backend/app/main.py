@@ -5,12 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.dependencies.auth import initialize_firebase_app
 from app.routers.v1 import router as v1_router
+from app.database import verify_and_setup_db
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Initialize external SDKs before accepting requests."""
+    """Initialize external SDKs and verify/setup DB before accepting requests."""
     initialize_firebase_app()
+    await verify_and_setup_db()
     yield
 
 

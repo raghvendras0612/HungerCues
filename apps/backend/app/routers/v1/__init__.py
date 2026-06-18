@@ -13,11 +13,17 @@ Future routes:
 
 from fastapi import APIRouter
 
+from app.routers.v1.auth import router as auth_router
+from app.routers.v1.babies import router as babies_router
+from app.routers.v1.feedings import router as feedings_router
+from app.routers.v1.sleep import router as sleep_router
+from app.routers.v1.ai import router as ai_router
+
 router = APIRouter()
 
-# Mount feature routers here as they are implemented:
-# router.include_router(auth_router, prefix="/auth", tags=["auth"])
-# router.include_router(families_router, prefix="/families", tags=["families"])
-# router.include_router(babies_router, prefix="/babies", tags=["babies"])
-# router.include_router(feedings_router, prefix="/feedings", tags=["feedings"])
-# router.include_router(sleep_router, prefix="/sleep", tags=["sleep"])
+router.include_router(auth_router, prefix="/auth", tags=["auth"])
+router.include_router(babies_router, prefix="/babies", tags=["babies"])
+router.include_router(feedings_router, prefix="/feedings", tags=["feedings"])
+router.include_router(sleep_router, prefix="/sleep", tags=["sleep"])
+router.include_router(ai_router, prefix="/ai", tags=["ai"])
+
