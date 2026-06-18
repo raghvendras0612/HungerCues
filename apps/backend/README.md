@@ -1,15 +1,15 @@
-# Baby Tracker — Backend
+# HungerCues — Backend
 
-FastAPI REST API for the Baby Tracker application.
+FastAPI REST API for the HungerCues application.
 
 ## Stack
 
 - **Runtime**: Python 3.12
 - **Framework**: FastAPI
 - **ORM**: SQLAlchemy (async)
-- **Migrations**: Alembic
-- **Database**: PostgreSQL 16
-- **Auth**: Firebase Admin SDK (server-side JWT verification)
+- **Database**: PostgreSQL 16 (Dynamic Fallback to SQLite `aiosqlite`)
+- **Auth**: Firebase Admin SDK (with local dev bypass)
+- **AI**: Gemini 2.5 Flash API
 - **Package Manager**: uv
 
 ## Setup
@@ -21,10 +21,10 @@ uv sync
 # Copy environment variables
 cp .env.example .env
 
-# Run database migrations
-uv run alembic upgrade head
+# (Optional) Add your GEMINI_API_KEY to the .env file to enable AI insights.
 
 # Start development server
+# Tables are auto-created on startup if they don't exist.
 uv run uvicorn app.main:app --reload
 ```
 
