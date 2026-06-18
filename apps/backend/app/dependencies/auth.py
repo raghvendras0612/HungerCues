@@ -57,10 +57,9 @@ def initialize_firebase_app() -> firebase_admin.App | None:
         service_account_path = Path(__file__).resolve().parents[2] / service_account_path
 
     if not service_account_path.is_file():
-        logger.warning(
-            f"Firebase service account file not found: {service_account_path}. Skipping initialization."
+        raise RuntimeError(
+            f"Firebase service account file not found: {service_account_path}"
         )
-        return None
 
     credential = credentials.Certificate(str(service_account_path))
     return firebase_admin.initialize_app(credential, options=options)

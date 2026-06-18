@@ -53,6 +53,13 @@ class FirebaseInitializationTests(unittest.TestCase):
 class FirebaseTokenVerificationTests(unittest.TestCase):
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
 
+    def setUp(self):
+        self.patcher = patch.object(settings, "firebase_project_id", "test-project")
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
     def test_requires_bearer_token(self):
         with self.assertRaises(HTTPException) as raised:
             asyncio.run(get_current_firebase_uid(None))

@@ -43,8 +43,7 @@ export interface AIInsight {
 }
 
 const defaultHost = Platform.OS === 'android' ? '10.0.2.2' : '127.0.0.1';
-export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? `http://${defaultHost}:8000/api/v1`;
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? `http://${defaultHost}:8000/api/v1`;
 
 const headers = {
   Authorization: 'Bearer mock-token',
@@ -67,12 +66,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listBabies: () => request<Baby[]>('/babies/'),
-  listFeedings: (babyId: number) =>
-    request<Feeding[]>(`/feedings/baby/${babyId}`),
-  listSleep: (babyId: number) =>
-    request<SleepSession[]>(`/sleep/baby/${babyId}`),
-  listDiapers: (babyId: number) =>
-    request<DiaperChange[]>(`/diapers/baby/${babyId}`),
+  listFeedings: (babyId: number) => request<Feeding[]>(`/feedings/baby/${babyId}`),
+  listSleep: (babyId: number) => request<SleepSession[]>(`/sleep/baby/${babyId}`),
+  listDiapers: (babyId: number) => request<DiaperChange[]>(`/diapers/baby/${babyId}`),
   createFeeding: (payload: Omit<Feeding, 'id'>) =>
     request<Feeding>('/feedings/', {
       method: 'POST',
@@ -88,6 +84,5 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  getInsights: (babyId: number) =>
-    request<AIInsight>(`/ai/insights/${babyId}`, { method: 'POST' }),
+  getInsights: (babyId: number) => request<AIInsight>(`/ai/insights/${babyId}`, { method: 'POST' }),
 };
