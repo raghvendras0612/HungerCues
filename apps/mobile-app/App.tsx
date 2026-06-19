@@ -64,7 +64,35 @@ export default function App() {
   const [insightLoading, setInsightLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activeSleepStart, setActiveSleepStart] = useState<string | null>(null);
+  const [sleepTrackingMode, setSleepTrackingMode] = useState<'timer' | 'manual'>('timer');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const compact = width < 430;
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (activeSleepStart) {
+      const start = new Date(activeSleepStart).getTime();
+      const update = () => {
+        setElapsedSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+      };
+      update();
+      interval = setInterval(update, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [activeSleepStart]);
+
+  const formatElapsed = (totalSecs: number) => {
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+  };
 
   const loadData = async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -154,15 +182,30 @@ export default function App() {
           notes: notes || null,
         });
       } else if (activity === 'sleep') {
-        const minutes = Number(duration) || 60;
-        await api.createSleep({
-          baby_id: baby.id,
-          sleep_start: new Date(now.getTime() - minutes * 60_000).toISOString(),
-          sleep_end: now.toISOString(),
-          duration_minutes: minutes,
-          tracking_method: subtype.toLowerCase(),
-          notes: notes || null,
-        });
+        if (sleepTrackingMode === 'timer') {
+          if (!activeSleepStart) return;
+          const start = new Date(activeSleepStart);
+          const minutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60_000));
+          await api.createSleep({
+            baby_id: baby.id,
+            sleep_start: activeSleepStart,
+            sleep_end: now.toISOString(),
+            duration_minutes: minutes,
+            tracking_method: 'timer',
+            notes: notes || null,
+          });
+          setActiveSleepStart(null);
+        } else {
+          const minutes = Number(duration) || 60;
+          await api.createSleep({
+            baby_id: baby.id,
+            sleep_start: new Date(now.getTime() - minutes * 60_000).toISOString(),
+            sleep_end: now.toISOString(),
+            duration_minutes: minutes,
+            tracking_method: 'manual',
+            notes: notes || null,
+          });
+        }
       } else {
         await api.createDiaper({
           baby_id: baby.id,
@@ -239,6 +282,9 @@ export default function App() {
                 setActivity(kind);
                 setTab('log');
               }}
+              activeSleepStart={activeSleepStart}
+              elapsedSeconds={elapsedSeconds}
+              formatElapsed={formatElapsed}
             />
           )}
           {tab === 'log' && (
@@ -257,11 +303,18 @@ export default function App() {
               setNotes={setNotes}
               saving={saving}
               onLog={logActivity}
+              activeSleepStart={activeSleepStart}
+              setActiveSleepStart={setActiveSleepStart}
+              sleepTrackingMode={sleepTrackingMode}
+              setSleepTrackingMode={setSleepTrackingMode}
+              elapsedSeconds={elapsedSeconds}
+              formatElapsed={formatElapsed}
             />
           )}
           {tab === 'history' && <HistoryScreen events={events} />}
           {tab === 'insights' && (
             <InsightsScreen
+              baby={baby}
               insight={insight}
               loading={insightLoading}
               feedings={feedings}
@@ -328,6 +381,9 @@ function HomeScreen({
   filter,
   setFilter,
   onQuickLog,
+  activeSleepStart,
+  elapsedSeconds,
+  formatElapsed,
 }: {
   baby: Baby | null;
   events: TimelineEvent[];
@@ -336,6 +392,9 @@ function HomeScreen({
   filter: 'all' | Activity;
   setFilter: (value: 'all' | Activity) => void;
   onQuickLog: (kind: Activity) => void;
+  activeSleepStart: string | null;
+  elapsedSeconds: number;
+  formatElapsed: (secs: number) => string;
 }) {
   const latestBottle = feedings.find((item) => item.quantity_ml);
   const today = new Date().toDateString();
@@ -349,6 +408,14 @@ function HomeScreen({
         <View style={styles.onlineDot} />
         <Text style={styles.connectionText}>Live data · SQLite connected</Text>
       </View>
+      {activeSleepStart && (
+        <TouchableOpacity style={styles.activeTimerBanner} onPress={() => onQuickLog('sleep')}>
+          <View style={styles.timerDot} />
+          <Text style={styles.activeTimerText}>
+            Baby is sleeping: {formatElapsed(elapsedSeconds)}
+          </Text>
+        </TouchableOpacity>
+      )}
       <SegmentedControl active={filter} onChange={setFilter} />
       <Text style={styles.heroTitle}>
         {events.length
@@ -393,6 +460,12 @@ function LogScreen({
   setNotes,
   saving,
   onLog,
+  activeSleepStart,
+  setActiveSleepStart,
+  sleepTrackingMode,
+  setSleepTrackingMode,
+  elapsedSeconds,
+  formatElapsed,
 }: {
   activity: Activity;
   setActivity: (value: Activity) => void;
@@ -408,6 +481,12 @@ function LogScreen({
   setNotes: (value: string) => void;
   saving: boolean;
   onLog: () => Promise<void>;
+  activeSleepStart: string | null;
+  setActiveSleepStart: (value: string | null) => void;
+  sleepTrackingMode: 'timer' | 'manual';
+  setSleepTrackingMode: (value: 'timer' | 'manual') => void;
+  elapsedSeconds: number;
+  formatElapsed: (secs: number) => string;
 }) {
   const options =
     activity === 'feed'
@@ -437,6 +516,35 @@ function LogScreen({
         ))}
       </View>
 
+      {activity === 'sleep' && (
+        <View style={styles.segmentRow}>
+          {[
+            { key: 'timer', label: 'Use Sleep Timer' },
+            { key: 'manual', label: 'Enter Manually' },
+          ].map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => setSleepTrackingMode(item.key as 'timer' | 'manual')}
+              style={[
+                styles.segment,
+                sleepTrackingMode === item.key && styles.segmentActive,
+                { flex: 1, height: 42, minWidth: 0, paddingHorizontal: 0, borderRadius: 21 },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.segmentText,
+                  sleepTrackingMode === item.key && styles.white,
+                  { fontSize: 13, fontWeight: '700' },
+                ]}
+              >
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>
         {activity === 'feed' ? 'Feed Type' : activity === 'sleep' ? 'Sleep Type' : 'Diaper Type'}
       </Text>
@@ -465,53 +573,105 @@ function LogScreen({
           </View>
           <Text style={styles.trendTitle}>{activityMeta[activity].label}ing Trends</Text>
         </View>
-        <View style={styles.formRow}>
-          {activity === 'feed' && subtype === 'Bottle' ? (
-            <View style={styles.formField}>
-              <Text style={styles.inputLabel}>Amount (ml)</Text>
-              <TextInput
-                accessibilityLabel="Amount in milliliters"
-                value={amount}
-                onChangeText={setAmount}
-                keyboardType="numeric"
-                style={styles.input}
-              />
+
+        {activity === 'sleep' && sleepTrackingMode === 'timer' ? (
+          activeSleepStart ? (
+            <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+              <Text style={{ fontSize: 14, color: C.muted, fontWeight: '700', letterSpacing: 0.5 }}>
+                ACTIVE TIMER
+              </Text>
+              <Text
+                style={{ fontSize: 44, color: C.purple, fontWeight: '800', marginVertical: 16 }}
+              >
+                {formatElapsed(elapsedSeconds)}
+              </Text>
+              <View style={{ width: '100%' }}>
+                <Text style={styles.inputLabel}>Notes (optional)</Text>
+                <TextInput
+                  accessibilityLabel="Notes"
+                  value={notes}
+                  onChangeText={setNotes}
+                  placeholder="What is your baby doing?"
+                  placeholderTextColor="#A9A9A9"
+                  style={[styles.input, styles.notesInput]}
+                />
+              </View>
+              <TouchableOpacity
+                disabled={saving}
+                style={[styles.logButton, { width: '100%' }, saving && styles.buttonDisabled]}
+                onPress={() => void onLog()}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.logButtonText}>End Sleep & Save</Text>
+                )}
+              </TouchableOpacity>
             </View>
-          ) : null}
-          {activity !== 'diaper' ? (
-            <View style={styles.formField}>
-              <Text style={styles.inputLabel}>Duration (min)</Text>
-              <TextInput
-                accessibilityLabel="Duration in minutes"
-                value={duration}
-                onChangeText={setDuration}
-                keyboardType="numeric"
-                style={styles.input}
-              />
-            </View>
-          ) : null}
-        </View>
-        <Text style={styles.inputLabel}>Notes (optional)</Text>
-        <TextInput
-          accessibilityLabel="Notes"
-          value={notes}
-          onChangeText={setNotes}
-          placeholder="Add a useful detail"
-          placeholderTextColor="#A9A9A9"
-          style={[styles.input, styles.notesInput]}
-        />
-        <MiniChart />
-        <TouchableOpacity
-          disabled={saving}
-          style={[styles.logButton, saving && styles.buttonDisabled]}
-          onPress={() => void onLog()}
-        >
-          {saving ? (
-            <ActivityIndicator color="#FFF" />
           ) : (
-            <Text style={styles.logButtonText}>Save {activityMeta[activity].label}</Text>
-          )}
-        </TouchableOpacity>
+            <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+              <Text style={{ fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 }}>
+                Press start to track your baby's sleep in real-time.
+              </Text>
+              <TouchableOpacity
+                style={[styles.logButton, { width: '100%', backgroundColor: C.purple }]}
+                onPress={() => setActiveSleepStart(new Date().toISOString())}
+              >
+                <Text style={styles.logButtonText}>Start Sleep Session</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        ) : (
+          <View>
+            <View style={styles.formRow}>
+              {activity === 'feed' && subtype === 'Bottle' ? (
+                <View style={styles.formField}>
+                  <Text style={styles.inputLabel}>Amount (ml)</Text>
+                  <TextInput
+                    accessibilityLabel="Amount in milliliters"
+                    value={amount}
+                    onChangeText={setAmount}
+                    keyboardType="numeric"
+                    style={styles.input}
+                  />
+                </View>
+              ) : null}
+              {activity !== 'diaper' ? (
+                <View style={styles.formField}>
+                  <Text style={styles.inputLabel}>Duration (min)</Text>
+                  <TextInput
+                    accessibilityLabel="Duration in minutes"
+                    value={duration}
+                    onChangeText={setDuration}
+                    keyboardType="numeric"
+                    style={styles.input}
+                  />
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.inputLabel}>Notes (optional)</Text>
+            <TextInput
+              accessibilityLabel="Notes"
+              value={notes}
+              onChangeText={setNotes}
+              placeholder="Add a useful detail"
+              placeholderTextColor="#A9A9A9"
+              style={[styles.input, styles.notesInput]}
+            />
+            <MiniChart />
+            <TouchableOpacity
+              disabled={saving}
+              style={[styles.logButton, saving && styles.buttonDisabled]}
+              onPress={() => void onLog()}
+            >
+              {saving ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <Text style={styles.logButtonText}>Save {activityMeta[activity].label}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -598,18 +758,25 @@ function HistoryScreen({ events }: { events: TimelineEvent[] }) {
 }
 
 function InsightsScreen({
+  baby,
   insight,
   loading,
   feedings,
   sleep,
   onGenerate,
 }: {
+  baby: Baby | null;
   insight: AIInsight | null;
   loading: boolean;
   feedings: Feeding[];
   sleep: SleepSession[];
   onGenerate: () => Promise<void>;
 }) {
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [askLoading, setAskLoading] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+
   const averageBottle = feedings.filter((item) => item.quantity_ml).length
     ? Math.round(
         feedings.reduce((sum, item) => sum + (item.quantity_ml ?? 0), 0) /
@@ -619,6 +786,22 @@ function InsightsScreen({
   const averageSleep = sleep.length
     ? Math.round(sleep.reduce((sum, item) => sum + (item.duration_minutes ?? 0), 0) / sleep.length)
     : 0;
+
+  const submitQuestion = async () => {
+    if (!baby || !question.trim() || askLoading) return;
+    setAskLoading(true);
+    setAskError(null);
+    setAnswer(null);
+    try {
+      const result = await api.askQuestion(baby.id, question.trim());
+      setAnswer(result.answer);
+    } catch {
+      setAskError('Could not reach the AI assistant. Check the backend connection and try again.');
+    } finally {
+      setAskLoading(false);
+    }
+  };
+
   return (
     <View>
       <Header title="Insights" action="✦" />
@@ -667,6 +850,62 @@ function InsightsScreen({
           </Text>
         )}
       </TouchableOpacity>
+
+      {/* Ask AI Parenting Assistant */}
+      <View style={styles.askSectionCard}>
+        <Text style={styles.askTitle}>Ask the AI Assistant</Text>
+        <Text style={styles.askSubtitle}>
+          Ask any parenting question — Gemini will answer using {baby?.name ?? 'your baby'}'s logs.
+        </Text>
+        <View style={styles.askInputContainer}>
+          <TextInput
+            accessibilityLabel="Parenting question input"
+            value={question}
+            onChangeText={setQuestion}
+            placeholder="e.g. Is Charlie sleeping enough?"
+            placeholderTextColor="#A9A9A9"
+            style={styles.askInput}
+            editable={!askLoading}
+          />
+          <TouchableOpacity
+            accessibilityLabel="Submit question"
+            disabled={askLoading || !question.trim()}
+            onPress={() => void submitQuestion()}
+            style={[
+              styles.askSubmitButton,
+              { width: 46, opacity: askLoading || !question.trim() ? 0.5 : 1 },
+            ]}
+          >
+            {askLoading ? (
+              <ActivityIndicator color="#FFF" size="small" />
+            ) : (
+              <Text style={styles.askSubmitButtonText}>→</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+        {askError && (
+          <View style={styles.askErrorBox}>
+            <Text style={styles.askErrorText}>{askError}</Text>
+          </View>
+        )}
+        {answer && (
+          <View style={styles.answerBox}>
+            <View style={styles.answerHeaderRow}>
+              <Text style={styles.answerTitle}>AI Response</Text>
+              <TouchableOpacity
+                accessibilityLabel="Clear answer"
+                onPress={() => {
+                  setAnswer(null);
+                  setQuestion('');
+                }}
+              >
+                <Text style={styles.clearText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.answerContentText, { marginTop: 10 }]}>{answer}</Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -1063,4 +1302,105 @@ const styles = StyleSheet.create({
   navItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   navIcon: { color: C.ink, fontSize: 23, fontWeight: '600', lineHeight: 25 },
   navLabel: { color: C.ink, fontSize: 10, marginTop: 3, fontWeight: '600' },
+  // Active sleep timer banner
+  activeTimerBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#E8F8EF',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 16,
+  },
+  timerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#38B86A',
+  },
+  activeTimerText: {
+    color: '#19763B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  // Ask AI section
+  askSectionCard: {
+    marginTop: 20,
+    backgroundColor: C.card,
+    borderRadius: 20,
+    padding: 18,
+  },
+  askTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: C.ink,
+    marginBottom: 6,
+  },
+  askSubtitle: {
+    fontSize: 12,
+    color: C.muted,
+    marginBottom: 16,
+  },
+  askInputContainer: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
+  askInput: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#F4F4F4',
+    paddingHorizontal: 14,
+    color: C.ink,
+    fontSize: 14,
+  },
+  askSubmitButton: {
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: C.purple,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  askSubmitButtonText: {
+    color: '#FFF',
+    fontWeight: '700',
+    fontSize: 18,
+  },
+  askErrorBox: {
+    backgroundColor: '#FFF0F0',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 12,
+  },
+  askErrorText: {
+    color: '#A23B3B',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  answerBox: {
+    backgroundColor: '#F0F0F0',
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 12,
+  },
+  answerHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  answerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.ink,
+  },
+  clearText: {
+    fontSize: 12,
+    color: C.muted,
+  },
+  answerContentText: {
+    fontSize: 14,
+    color: C.ink,
+    lineHeight: 20,
+  },
 });

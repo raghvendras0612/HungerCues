@@ -31,3 +31,11 @@ class AIInsightResponse(BaseModel):
     feeding_insights: str = Field(description="Analysis of feeding logs, patterns, or gaps.")
     sleep_insights: str = Field(description="Analysis of sleeping cycles, duration, and patterns.")
     recommendations: list[str] = Field(description="List of 3 actionable parenting recommendations based on the logs.")
+
+
+class AIQuestionRequest(BaseModel):
+    question: str
+
+
+class AIQuestionResponse(BaseModel):
+    answer: str

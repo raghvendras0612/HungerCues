@@ -24,7 +24,7 @@ class GeminiClient:
         """Call Gemini API to generate content with retries."""
         if not self.api_key:
             logger.warning("GEMINI_API_KEY is not configured. Returning mock response.")
-            return self._get_mock_response()
+            return self._get_mock_response(prompt)
 
         url = f"{self.base_url}?key={self.api_key}"
 
@@ -62,9 +62,13 @@ class GeminiClient:
                 logger.error(f"Failed to parse Gemini API response: {data}")
                 raise ValueError("Invalid response format from Gemini API") from exc
 
-    def _get_mock_response(self) -> str:
+    def _get_mock_response(self, prompt: str = "") -> str:
         """Fallback mock response when Gemini API key is missing."""
         import json
+        if "Parent's Question" in prompt or "answer" in prompt:
+            return json.dumps({
+                "answer": "This is a local mock response because no GEMINI_API_KEY was configured. Please set the GEMINI_API_KEY environment variable in your backend .env file to enable live Gemini answers."
+            })
         mock_data = {
             "summary": "This is a placeholder parenting insight since the Gemini API key was not configured. Baby seems to be feeding well and sleeping regularly.",
             "feeding_insights": "Feeding duration and quantity appear normal for this age group. Continue tracking details.",

@@ -34,7 +34,8 @@ def initialize_firebase_app() -> firebase_admin.App | None:
     except ValueError:
         pass
 
-    if not settings.firebase_project_id and not settings.firebase_service_account_key_path:
+    is_project_id_placeholder = not settings.firebase_project_id or settings.firebase_project_id == "your-firebase-project-id"
+    if is_project_id_placeholder and not settings.firebase_service_account_key_path:
         logger.warning("Firebase credentials not configured. Firebase admin SDK will not be initialized.")
         return None
 
@@ -89,9 +90,8 @@ async def get_current_firebase_uid(
     token = bearer_credentials.credentials
 
     # Allow mock-token bypass ONLY when Firebase is not configured (local dev)
-    firebase_configured = bool(
-        settings.firebase_project_id or settings.firebase_service_account_key_path
-    )
+    is_project_id_configured = bool(settings.firebase_project_id and settings.firebase_project_id != "your-firebase-project-id")
+    firebase_configured = is_project_id_configured or bool(settings.firebase_service_account_key_path)
     if token == "mock-token" and not firebase_configured:
         return "mock-user-uid"
 

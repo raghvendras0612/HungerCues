@@ -75,3 +75,51 @@ class AIService:
                     "Consult your pediatrician if you notice any sudden changes in feeding/sleeping patterns."
                 ]
             )
+
+    async def ask_baby_question(self, request: AIInsightRequest, question: str) -> str:
+        """Ask Gemini a question about the baby, keeping their logs in context."""
+        system_instruction = (
+            "You are a helpful, professional, and empathetic pediatric nurse and parenting assistant. "
+            "Your goal is to answer parents' questions about their baby, keeping the baby's details "
+            "and log data in mind. You must return your response strictly as a JSON object with a single "
+            "field 'answer' containing your friendly, scientific, and helpful response. Do not include "
+            "markdown code fence formatting in the raw text response; output only valid raw JSON."
+        )
+
+        # Build log summaries
+        feeding_text = ""
+        for i, f in enumerate(request.feedings):
+            qty = f"{f.quantity_ml}ml" if f.quantity_ml else "N/A"
+            feeding_text += f"- Feeding #{i+1}: Type={f.type}, Start={f.start_time.isoformat()}, Duration={f.duration_minutes}m, Qty={qty}, Notes='{f.notes or ''}'\n"
+
+        sleep_text = ""
+        for i, s in enumerate(request.sleep_sessions):
+            end_time = s.sleep_end.isoformat() if s.sleep_end else "Ongoing"
+            dur = f"{s.duration_minutes}m" if s.duration_minutes else "N/A"
+            sleep_text += f"- Sleep #{i+1}: Start={s.sleep_start.isoformat()}, End={end_time}, Duration={dur}, Method={s.tracking_method}, Notes='{s.notes or ''}'\n"
+
+        prompt = (
+            f"Please review the following details for baby '{request.baby_name}' "
+            f"({request.gender}, born on {request.birth_date}):\n\n"
+            f"--- FEEDING LOGS ---\n{feeding_text if feeding_text else 'No feedings recorded.'}\n\n"
+            f"--- SLEEP LOGS ---\n{sleep_text if sleep_text else 'No sleep sessions recorded.'}\n\n"
+            f"Parent's Question: {question}\n\n"
+            f"Please output a JSON object with a single field 'answer' containing your response."
+        )
+
+        try:
+            raw_response = await self.client.generate_content(prompt, system_instruction)
+            cleaned_response = raw_response.strip()
+            if cleaned_response.startswith("```"):
+                lines = cleaned_response.splitlines()
+                if lines[0].startswith("```json") or lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                cleaned_response = "\n".join(lines).strip()
+
+            data = json.loads(cleaned_response)
+            return data.get("answer", "I could not generate an answer at this time.")
+        except Exception as e:
+            logger.error(f"Error answering question: {e}", exc_info=True)
+            return f"I'm sorry, I encountered an error while processing your question. Please try again."

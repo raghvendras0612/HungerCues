@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { Platform } from 'react-native';
 
 export interface Baby {
@@ -85,4 +86,9 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getInsights: (babyId: number) => request<AIInsight>(`/ai/insights/${babyId}`, { method: 'POST' }),
+  askQuestion: (babyId: number, question: string) =>
+    request<{ answer: string }>(`/ai/ask/${babyId}`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
 };
