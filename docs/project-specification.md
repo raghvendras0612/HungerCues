@@ -163,7 +163,7 @@ Uses:
 
 Model:
 
-* Gemma 4
+* Gemini 2.5 pro
 
 Architecture:
 
@@ -173,7 +173,7 @@ Backend
 ↓
 AI Service Layer
 ↓
-Gemma
+Gemini 2.5 pro
 
 Rules:
 

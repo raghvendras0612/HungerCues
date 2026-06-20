@@ -36,6 +36,15 @@ export interface DiaperChange {
   notes?: string | null;
 }
 
+export interface GrowthRecord {
+  id: number;
+  baby_id: number;
+  recorded_at: string;
+  weight_kg?: number | null;
+  height_cm?: number | null;
+  notes?: string | null;
+}
+
 export interface AIInsight {
   summary: string;
   feeding_insights: string;
@@ -70,6 +79,7 @@ export const api = {
   listFeedings: (babyId: number) => request<Feeding[]>(`/feedings/baby/${babyId}`),
   listSleep: (babyId: number) => request<SleepSession[]>(`/sleep/baby/${babyId}`),
   listDiapers: (babyId: number) => request<DiaperChange[]>(`/diapers/baby/${babyId}`),
+  listGrowth: (babyId: number) => request<GrowthRecord[]>(`/growth/baby/${babyId}`),
   createFeeding: (payload: Omit<Feeding, 'id'>) =>
     request<Feeding>('/feedings/', {
       method: 'POST',
@@ -82,6 +92,11 @@ export const api = {
     }),
   createDiaper: (payload: Omit<DiaperChange, 'id'>) =>
     request<DiaperChange>('/diapers/', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createGrowth: (payload: Omit<GrowthRecord, 'id'>) =>
+    request<GrowthRecord>('/growth/', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -7,8 +8,21 @@ from app.dependencies.auth import get_current_firebase_uid
 from app.models.baby import Baby
 from app.models.feeding import Feeding
 from app.models.sleep import SleepSession
+from app.models.diaper import DiaperChange
+from app.models.growth import GrowthRecord
 from app.services.ai.service import AIService
-from app.services.ai.schemas import AIInsightRequest, AIInsightResponse, FeedingLogInput, SleepLogInput, AIQuestionRequest, AIQuestionResponse
+from app.services.ai.schemas import (
+    AIInsightRequest,
+    AIInsightResponse,
+    AIWeeklySummaryRequest,
+    AIWeeklySummaryResponse,
+    DiaperLogInput,
+    FeedingLogInput,
+    GrowthLogInput,
+    SleepLogInput,
+    AIQuestionRequest,
+    AIQuestionResponse,
+)
 
 router = APIRouter()
 ai_service = AIService()
@@ -124,3 +138,77 @@ async def ask_question(
     # 5. Call AI Service
     answer = await ai_service.ask_baby_question(req, question_in.question)
     return AIQuestionResponse(answer=answer)
+
+
+@router.post("/weekly-summary/{baby_id}", response_model=AIWeeklySummaryResponse)
+async def get_weekly_summary(
+    baby_id: int,
+    db: AsyncSession = Depends(get_db),
+    firebase_uid: str = Depends(get_current_firebase_uid),
+):
+    """Generate a comprehensive 7-day AI summary of all baby activity logs."""
+    # 1. Fetch baby
+    stmt = select(Baby).where(Baby.id == baby_id)
+    result = await db.execute(stmt)
+    baby = result.scalar_one_or_none()
+    if not baby:
+        raise HTTPException(status_code=404, detail="Baby not found")
+
+    # 2. Define 7-day window
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+    # 3. Fetch last 7 days of all log types
+    f_stmt = select(Feeding).where(Feeding.baby_id == baby_id, Feeding.start_time >= cutoff).order_by(Feeding.start_time.desc())
+    s_stmt = select(SleepSession).where(SleepSession.baby_id == baby_id, SleepSession.sleep_start >= cutoff).order_by(SleepSession.sleep_start.desc())
+    d_stmt = select(DiaperChange).where(DiaperChange.baby_id == baby_id, DiaperChange.changed_at >= cutoff).order_by(DiaperChange.changed_at.desc())
+    g_stmt = select(GrowthRecord).where(GrowthRecord.baby_id == baby_id, GrowthRecord.recorded_at >= cutoff).order_by(GrowthRecord.recorded_at.desc())
+
+    feedings = (await db.execute(f_stmt)).scalars().all()
+    sleep_sessions = (await db.execute(s_stmt)).scalars().all()
+    diapers = (await db.execute(d_stmt)).scalars().all()
+    growth_records = (await db.execute(g_stmt)).scalars().all()
+
+    # 4. Construct request
+    req = AIWeeklySummaryRequest(
+        baby_name=baby.name,
+        birth_date=baby.birth_date.isoformat(),
+        gender=baby.gender,
+        feedings=[
+            FeedingLogInput(
+                type=f.type,
+                start_time=f.start_time,
+                duration_minutes=f.duration_minutes,
+                quantity_ml=f.quantity_ml,
+                notes=f.notes,
+            )
+            for f in feedings
+        ],
+        sleep_sessions=[
+            SleepLogInput(
+                sleep_start=s.sleep_start,
+                sleep_end=s.sleep_end,
+                duration_minutes=s.duration_minutes,
+                tracking_method=s.tracking_method,
+                notes=s.notes,
+            )
+            for s in sleep_sessions
+        ],
+        diapers=[
+            DiaperLogInput(
+                changed_at=d.changed_at,
+                type=d.type,
+            )
+            for d in diapers
+        ],
+        growth_records=[
+            GrowthLogInput(
+                recorded_at=g.recorded_at,
+                weight_kg=g.weight_kg,
+                height_cm=g.height_cm,
+            )
+            for g in growth_records
+        ],
+    )
+
+    # 5. Call AI service
+    return await ai_service.get_weekly_summary(req)

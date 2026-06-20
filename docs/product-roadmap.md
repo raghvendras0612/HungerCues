@@ -12,7 +12,7 @@
 
 ## Phase 2: Intelligence & Engagement
 
-- AI Insights (Gemma integration)
+- AI Insights (Gemini integration)
 - Push notifications (FCM)
 - Weekly summaries
 - Growth tracking (Height/Weight)

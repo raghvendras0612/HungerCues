@@ -13,10 +13,10 @@ import {
   useWindowDimensions,
 } from 'react-native';
 
-import { api, AIInsight, Baby, DiaperChange, Feeding, SleepSession } from './src/api';
+import { api, AIInsight, Baby, DiaperChange, Feeding, SleepSession, GrowthRecord } from './src/api';
 
 type Tab = 'home' | 'log' | 'history' | 'insights';
-type Activity = 'feed' | 'sleep' | 'diaper';
+type Activity = 'feed' | 'sleep' | 'diaper' | 'growth';
 type FeedType = 'Breast' | 'Bottle' | 'Solid';
 type TimelineEvent = {
   id: string;
@@ -42,6 +42,7 @@ const activityMeta = {
   feed: { icon: '♙', label: 'Feed' },
   sleep: { icon: '☾', label: 'Sleep' },
   diaper: { icon: '♢', label: 'Diaper' },
+  growth: { icon: '⚖', label: 'Growth' },
 };
 
 export default function App() {
@@ -58,6 +59,10 @@ export default function App() {
   const [feedings, setFeedings] = useState<Feeding[]>([]);
   const [sleep, setSleep] = useState<SleepSession[]>([]);
   const [diapers, setDiapers] = useState<DiaperChange[]>([]);
+  const [growth, setGrowth] = useState<GrowthRecord[]>([]);
+  const [unitSystem, setUnitSystem] = useState<'metric' | 'imperial'>('metric');
+  const [weightInput, setWeightInput] = useState('');
+  const [heightInput, setHeightInput] = useState('');
   const [insight, setInsight] = useState<AIInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -101,15 +106,17 @@ export default function App() {
       const babies = await api.listBabies();
       const activeBaby = babies[0];
       if (!activeBaby) throw new Error('No baby profile was found.');
-      const [feedingData, sleepData, diaperData] = await Promise.all([
+      const [feedingData, sleepData, diaperData, growthData] = await Promise.all([
         api.listFeedings(activeBaby.id),
         api.listSleep(activeBaby.id),
         api.listDiapers(activeBaby.id),
+        api.listGrowth(activeBaby.id),
       ]);
       setBaby(activeBaby);
       setFeedings(feedingData);
       setSleep(sleepData);
       setDiapers(diaperData);
+      setGrowth(growthData);
     } catch {
       setError('Cannot reach the tracker service. Start the backend and pull to retry.');
     } finally {
@@ -127,10 +134,14 @@ export default function App() {
         ? { type: feedType, amount: '120', duration: '15' }
         : activity === 'sleep'
           ? { type: 'Nap', amount: '', duration: '60' }
-          : { type: 'Wet', amount: '', duration: '' };
+          : activity === 'diaper'
+            ? { type: 'Wet', amount: '', duration: '' }
+            : { type: 'Growth', amount: '', duration: '' };
     setSubtype(defaults.type);
     setAmount(defaults.amount);
     setDuration(defaults.duration);
+    setWeightInput('');
+    setHeightInput('');
     setNotes('');
   }, [activity, feedType]);
 
@@ -159,10 +170,42 @@ export default function App() {
       occurredAt: item.changed_at,
       note: item.notes || 'Changed and all clean',
     }));
-    return [...feedingEvents, ...sleepEvents, ...diaperEvents].sort(
+    const growthEvents = growth.map((item) => {
+      let detailStr = '';
+      if (item.weight_kg) {
+        if (unitSystem === 'metric') {
+          detailStr += `Weight: ${item.weight_kg} kg`;
+        } else {
+          const lbs = (item.weight_kg * 2.20462).toFixed(2);
+          detailStr += `Weight: ${lbs} lbs`;
+        }
+      }
+      if (item.height_cm) {
+        if (detailStr) detailStr += ' · ';
+        if (unitSystem === 'metric') {
+          detailStr += `Height: ${item.height_cm} cm`;
+        } else {
+          const inches = (item.height_cm / 2.54).toFixed(1);
+          detailStr += `Height: ${inches} in`;
+        }
+      }
+      if (item.notes) {
+        if (detailStr) detailStr += ' · ';
+        detailStr += item.notes;
+      }
+      return {
+        id: `growth-${item.id}`,
+        kind: 'growth' as const,
+        icon: activityMeta.growth.icon,
+        title: 'Growth Entry',
+        occurredAt: item.recorded_at,
+        note: detailStr || 'Logged growth',
+      };
+    });
+    return [...feedingEvents, ...sleepEvents, ...diaperEvents, ...growthEvents].sort(
       (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt),
     );
-  }, [feedings, sleep, diapers]);
+  }, [feedings, sleep, diapers, growth, unitSystem]);
 
   const visibleEvents = filter === 'all' ? events : events.filter((event) => event.kind === filter);
 
@@ -206,13 +249,38 @@ export default function App() {
             notes: notes || null,
           });
         }
-      } else {
+      } else if (activity === 'diaper') {
         await api.createDiaper({
           baby_id: baby.id,
           changed_at: now.toISOString(),
           type: subtype.toLowerCase(),
           notes: notes || null,
         });
+      } else if (activity === 'growth') {
+        let w_kg: number | null = null;
+        let h_cm: number | null = null;
+        if (weightInput.trim()) {
+          const w_val = Number(weightInput);
+          w_kg = unitSystem === 'metric' ? w_val : w_val / 2.20462;
+        }
+        if (heightInput.trim()) {
+          const h_val = Number(heightInput);
+          h_cm = unitSystem === 'metric' ? h_val : h_val * 2.54;
+        }
+        if (w_kg === null && h_cm === null) {
+          setError('Please enter at least one metric (weight or height).');
+          setSaving(false);
+          return;
+        }
+        await api.createGrowth({
+          baby_id: baby.id,
+          recorded_at: now.toISOString(),
+          weight_kg: w_kg,
+          height_cm: h_cm,
+          notes: notes || null,
+        });
+        setWeightInput('');
+        setHeightInput('');
       }
       await loadData(false);
       setNotice(`${activityMeta[activity].label} saved to the database`);
