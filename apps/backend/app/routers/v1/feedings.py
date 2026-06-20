@@ -17,6 +17,7 @@ class FeedingCreate(BaseModel):
     start_time: datetime
     duration_minutes: int
     quantity_ml: float | None = None
+    breast_side: str | None = None
     notes: str | None = None
 
 
@@ -27,6 +28,7 @@ class FeedingSchema(BaseModel):
     start_time: datetime
     duration_minutes: int
     quantity_ml: float | None = None
+    breast_side: str | None = None
     notes: str | None = None
 
     class Config:
@@ -45,6 +47,7 @@ async def create_feeding(
         start_time=feeding_in.start_time,
         duration_minutes=feeding_in.duration_minutes,
         quantity_ml=feeding_in.quantity_ml,
+        breast_side=feeding_in.breast_side,
         notes=feeding_in.notes,
     )
     db.add(feeding)

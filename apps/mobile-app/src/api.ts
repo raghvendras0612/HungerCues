@@ -1,5 +1,3 @@
-/// <reference types="node" />
-import { Platform } from 'react-native';
 
 export interface Baby {
   id: number;
@@ -15,6 +13,7 @@ export interface Feeding {
   start_time: string;
   duration_minutes: number;
   quantity_ml?: number | null;
+  breast_side?: string | null;
   notes?: string | null;
 }
 
@@ -52,7 +51,32 @@ export interface AIInsight {
   recommendations: string[];
 }
 
-const defaultHost = Platform.OS === 'android' ? '10.0.2.2' : '127.0.0.1';
+export interface Milestone {
+  id: number;
+  baby_id: number;
+  name: string;
+  achieved_at?: string | null;
+  notes?: string | null;
+}
+
+export interface NotificationEntry {
+  id: number;
+  title: string;
+  body: string;
+  sent_at: string;
+  type: string;
+}
+
+export interface AIWeeklySummary {
+  summary: string;
+  feeding_insights: string;
+  sleep_insights: string;
+  growth_insights: string;
+  recommendations: string[];
+}
+
+
+const defaultHost = '192.168.1.6';
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? `http://${defaultHost}:8000/api/v1`;
 
 const headers = {
@@ -106,4 +130,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ question }),
     }),
+  listMilestones: (babyId: number) => request<Milestone[]>(`/milestones/baby/${babyId}`),
+  createMilestone: (payload: Omit<Milestone, 'id'>) =>
+    request<Milestone>('/milestones/', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateMilestone: (id: number, payload: Partial<Omit<Milestone, 'id' | 'baby_id' | 'name'>>) =>
+    request<Milestone>(`/milestones/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteMilestone: (id: number) => request<{ status: string }>(`/milestones/${id}`, { method: 'DELETE' }),
+  getWeeklySummary: (babyId: number) => request<AIWeeklySummary>(`/ai/weekly-summary/${babyId}`, { method: 'POST' }),
+  listRecentNotifications: () => request<NotificationEntry[]>('/notifications/recent'),
+  registerDeviceToken: (payload: { fcm_token: string; baby_id: number }) =>
+    request<{ status: string }>('/notifications/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
 };

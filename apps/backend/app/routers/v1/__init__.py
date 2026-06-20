@@ -35,6 +35,8 @@ from app.routers.v1.sleep import router as sleep_router
 from app.routers.v1.ai import router as ai_router
 from app.routers.v1.diapers import router as diapers_router
 from app.routers.v1.growth import router as growth_router
+from app.routers.v1.milestones import router as milestones_router
+from app.routers.v1.notifications import router as notifications_router
 
 router = APIRouter()
 
@@ -45,3 +47,6 @@ router.include_router(sleep_router, prefix="/sleep", tags=["sleep"])
 router.include_router(ai_router, prefix="/ai", tags=["ai"])
 router.include_router(diapers_router, prefix="/diapers", tags=["diapers"])
 router.include_router(growth_router, prefix="/growth", tags=["growth"])
+router.include_router(milestones_router, prefix="/milestones", tags=["milestones"])
+router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
+

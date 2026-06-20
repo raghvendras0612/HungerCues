@@ -14,4 +14,5 @@ class Feeding(Base):
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity_ml: Mapped[float | None] = mapped_column(Float, nullable=True)
+    breast_side: Mapped[str | None] = mapped_column(String(20), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   RefreshControl,
   SafeAreaView,
   ScrollView,
@@ -13,9 +14,9 @@ import {
   useWindowDimensions,
 } from 'react-native';
 
-import { api, AIInsight, Baby, DiaperChange, Feeding, SleepSession, GrowthRecord } from './src/api';
+import { api, AIInsight, Baby, DiaperChange, Feeding, SleepSession, GrowthRecord, Milestone, NotificationEntry, AIWeeklySummary } from './src/api';
 
-type Tab = 'home' | 'log' | 'history' | 'insights';
+type Tab = 'home' | 'log' | 'history' | 'insights' | 'milestones' | 'growth';
 type Activity = 'feed' | 'sleep' | 'diaper' | 'growth';
 type FeedType = 'Breast' | 'Bottle' | 'Solid';
 type TimelineEvent = {
@@ -55,6 +56,7 @@ export default function App() {
   const [amount, setAmount] = useState('120');
   const [duration, setDuration] = useState('15');
   const [notes, setNotes] = useState('');
+  const [breastSide, setBreastSide] = useState<'Left' | 'Right'>('Left');
   const [baby, setBaby] = useState<Baby | null>(null);
   const [feedings, setFeedings] = useState<Feeding[]>([]);
   const [sleep, setSleep] = useState<SleepSession[]>([]);
@@ -72,10 +74,16 @@ export default function App() {
   const [activeSleepStart, setActiveSleepStart] = useState<string | null>(null);
   const [sleepTrackingMode, setSleepTrackingMode] = useState<'timer' | 'manual'>('timer');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [customTimeEnabled, setCustomTimeEnabled] = useState(false);
+  const [customTime, setCustomTime] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationEntry[]>([]);
   const compact = width < 430;
 
+
+
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (activeSleepStart) {
       const start = new Date(activeSleepStart).getTime();
       const update = () => {
@@ -124,8 +132,37 @@ export default function App() {
     }
   };
 
+  const getCustomDateTime = (timeStr: string): Date | null => {
+    const parts = timeStr.split(':');
+    if (parts.length !== 2) return null;
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      return null;
+    }
+    const d = new Date();
+    d.setHours(hours, minutes, 0, 0);
+    if (d > new Date()) {
+      d.setDate(d.getDate() - 1);
+    }
+    return d;
+  };
+
   useEffect(() => {
     void loadData();
+  }, []);
+
+  // Poll notifications on interval
+  useEffect(() => {
+    const fetchNotifications = async () => {
+      try {
+        const data = await api.listRecentNotifications();
+        setNotifications(data);
+      } catch {}
+    };
+    void fetchNotifications();
+    const interval = setInterval(fetchNotifications, 10000); // 10s interval
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -143,6 +180,12 @@ export default function App() {
     setWeightInput('');
     setHeightInput('');
     setNotes('');
+    setBreastSide('Left');
+    setCustomTimeEnabled(false);
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    setCustomTime(`${hh}:${mm}`);
   }, [activity, feedType]);
 
   const events = useMemo<TimelineEvent[]>(() => {
@@ -152,7 +195,7 @@ export default function App() {
       icon: activityMeta.feed.icon,
       title: `${capitalize(item.type)} Feed`,
       occurredAt: item.start_time,
-      note: `${item.quantity_ml ? `${item.quantity_ml} ml · ` : ''}${item.duration_minutes} min${item.notes ? ` · ${item.notes}` : ''}`,
+      note: `${item.breast_side ? `Side: ${item.breast_side} · ` : ''}${item.quantity_ml ? `${item.quantity_ml} ml · ` : ''}${item.duration_minutes} min${item.notes ? ` · ${item.notes}` : ''}`,
     }));
     const sleepEvents = sleep.map((item) => ({
       id: `sleep-${item.id}`,
@@ -216,12 +259,23 @@ export default function App() {
     const now = new Date();
     try {
       if (activity === 'feed') {
+        let startTime = now;
+        if (customTimeEnabled) {
+          const customDate = getCustomDateTime(customTime);
+          if (!customDate) {
+            setError('Please enter a valid time in HH:MM format (e.g. 14:30)');
+            setSaving(false);
+            return;
+          }
+          startTime = customDate;
+        }
         await api.createFeeding({
           baby_id: baby.id,
           type: subtype.toLowerCase(),
-          start_time: now.toISOString(),
+          start_time: startTime.toISOString(),
           duration_minutes: Number(duration) || 15,
           quantity_ml: subtype === 'Bottle' ? Number(amount) || 120 : null,
+          breast_side: subtype === 'Breast' ? breastSide : null,
           notes: notes || null,
         });
       } else if (activity === 'sleep') {
@@ -240,10 +294,21 @@ export default function App() {
           setActiveSleepStart(null);
         } else {
           const minutes = Number(duration) || 60;
+          let startTime = new Date(now.getTime() - minutes * 60_000);
+          if (customTimeEnabled) {
+            const customDate = getCustomDateTime(customTime);
+            if (!customDate) {
+              setError('Please enter a valid time in HH:MM format (e.g. 14:30)');
+              setSaving(false);
+              return;
+            }
+            startTime = customDate;
+          }
+          const endTime = new Date(startTime.getTime() + minutes * 60_000);
           await api.createSleep({
             baby_id: baby.id,
-            sleep_start: new Date(now.getTime() - minutes * 60_000).toISOString(),
-            sleep_end: now.toISOString(),
+            sleep_start: startTime.toISOString(),
+            sleep_end: endTime.toISOString(),
             duration_minutes: minutes,
             tracking_method: 'manual',
             notes: notes || null,
@@ -272,9 +337,19 @@ export default function App() {
           setSaving(false);
           return;
         }
+        let growthTime = now;
+        if (customTimeEnabled) {
+          const customDate = getCustomDateTime(customTime);
+          if (!customDate) {
+            setError('Please enter a valid time in HH:MM format (e.g. 14:30)');
+            setSaving(false);
+            return;
+          }
+          growthTime = customDate;
+        }
         await api.createGrowth({
           baby_id: baby.id,
-          recorded_at: now.toISOString(),
+          recorded_at: growthTime.toISOString(),
           weight_kg: w_kg,
           height_cm: h_cm,
           notes: notes || null,
@@ -338,57 +413,134 @@ export default function App() {
               <Text style={styles.loadingText}>Loading Charlie's day...</Text>
             </View>
           ) : null}
-          {tab === 'home' && (
-            <HomeScreen
-              baby={baby}
-              events={visibleEvents}
-              feedings={feedings}
-              diapers={diapers}
-              filter={filter}
-              setFilter={setFilter}
-              onQuickLog={(kind) => {
-                setActivity(kind);
-                setTab('log');
-              }}
-              activeSleepStart={activeSleepStart}
-              elapsedSeconds={elapsedSeconds}
-              formatElapsed={formatElapsed}
-            />
-          )}
-          {tab === 'log' && (
-            <LogScreen
-              activity={activity}
-              setActivity={setActivity}
-              feedType={feedType}
-              setFeedType={setFeedType}
-              subtype={subtype}
-              setSubtype={setSubtype}
-              amount={amount}
-              setAmount={setAmount}
-              duration={duration}
-              setDuration={setDuration}
-              notes={notes}
-              setNotes={setNotes}
-              saving={saving}
-              onLog={logActivity}
-              activeSleepStart={activeSleepStart}
-              setActiveSleepStart={setActiveSleepStart}
-              sleepTrackingMode={sleepTrackingMode}
-              setSleepTrackingMode={setSleepTrackingMode}
-              elapsedSeconds={elapsedSeconds}
-              formatElapsed={formatElapsed}
-            />
-          )}
-          {tab === 'history' && <HistoryScreen events={events} />}
-          {tab === 'insights' && (
-            <InsightsScreen
-              baby={baby}
-              insight={insight}
-              loading={insightLoading}
-              feedings={feedings}
-              sleep={sleep}
-              onGenerate={loadInsights}
-            />
+          {showNotifications ? (
+            <View style={{ paddingBottom: 40 }}>
+              <Header title="Notification Center" action="✕" onPress={() => setShowNotifications(false)} />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <Text style={styles.sectionTitle}>Recent Alerts</Text>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const data = await api.listRecentNotifications();
+                      setNotifications(data);
+                    } catch {}
+                  }}
+                  style={{ backgroundColor: C.purpleSoft, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }}
+                >
+                  <Text style={{ color: C.purpleDark, fontWeight: '700', fontSize: 12 }}>Refresh</Text>
+                </TouchableOpacity>
+              </View>
+
+              {!notifications.length ? (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>No notifications</Text>
+                  <Text style={styles.emptyCopy}>All caught up! Active alerts will appear here.</Text>
+                </View>
+              ) : (
+                notifications.map(n => (
+                  <View key={n.id} style={[styles.eventCard, { borderLeftWidth: 4, borderLeftColor: n.type === 'sleep_timer' ? '#48BB78' : '#ED8936' }]}>
+                    <View style={styles.eventIcon}>
+                      <Text style={styles.purpleText}>
+                        {n.type === 'sleep_timer' ? '☾' : n.type === 'feed_gap' ? '♙' : '♢'}
+                      </Text>
+                    </View>
+                    <View style={styles.eventBody}>
+                      <Text style={styles.eventTitle}>{n.title}</Text>
+                      <Text style={{ fontSize: 13, color: C.ink, marginTop: 2 }}>{n.body}</Text>
+                      <Text style={styles.eventMeta}>
+                        {new Date(n.sent_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              )}
+              
+              <TouchableOpacity
+                onPress={() => setShowNotifications(false)}
+                style={[styles.logButton, { marginTop: 20, backgroundColor: '#ECECEC' }]}
+              >
+                <Text style={{ color: C.ink, fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              {tab === 'home' && (
+                <HomeScreen
+                  baby={baby}
+                  events={visibleEvents}
+                  feedings={feedings}
+                  diapers={diapers}
+                  filter={filter}
+                  setFilter={setFilter}
+                  onQuickLog={(kind) => {
+                    setActivity(kind);
+                    setTab('log');
+                  }}
+                  activeSleepStart={activeSleepStart}
+                  elapsedSeconds={elapsedSeconds}
+                  formatElapsed={formatElapsed}
+                  notifications={notifications}
+                  onPressNotifications={() => setShowNotifications(true)}
+                />
+              )}
+              {tab === 'log' && (
+                <LogScreen
+                  activity={activity}
+                  setActivity={setActivity}
+                  feedType={feedType}
+                  setFeedType={setFeedType}
+                  subtype={subtype}
+                  setSubtype={setSubtype}
+                  amount={amount}
+                  setAmount={setAmount}
+                  duration={duration}
+                  setDuration={setDuration}
+                  notes={notes}
+                  setNotes={setNotes}
+                  saving={saving}
+                  onLog={logActivity}
+                  activeSleepStart={activeSleepStart}
+                  setActiveSleepStart={setActiveSleepStart}
+                  sleepTrackingMode={sleepTrackingMode}
+                  setSleepTrackingMode={setSleepTrackingMode}
+                  elapsedSeconds={elapsedSeconds}
+                  formatElapsed={formatElapsed}
+                  customTimeEnabled={customTimeEnabled}
+                  setCustomTimeEnabled={setCustomTimeEnabled}
+                  customTime={customTime}
+                  setCustomTime={setCustomTime}
+                  unitSystem={unitSystem}
+                  setUnitSystem={setUnitSystem}
+                  weightInput={weightInput}
+                  setWeightInput={setWeightInput}
+                  heightInput={heightInput}
+                  setHeightInput={setHeightInput}
+                  breastSide={breastSide}
+                  setBreastSide={setBreastSide}
+                />
+              )}
+              {tab === 'growth' && (
+                <GrowthScreen
+                  baby={baby}
+                  growth={growth}
+                  unitSystem={unitSystem}
+                  setUnitSystem={setUnitSystem}
+                  onRefreshData={() => void loadData(false)}
+                />
+              )}
+              {tab === 'history' && <HistoryScreen events={events} />}
+              {tab === 'insights' && (
+                <InsightsScreen
+                  baby={baby}
+                  insight={insight}
+                  loading={insightLoading}
+                  feedings={feedings}
+                  sleep={sleep}
+                  onGenerate={loadInsights}
+                />
+              )}
+              {tab === 'milestones' && <MilestonesScreen baby={baby} />}
+            </>
           )}
         </ScrollView>
         <BottomNav active={tab} onChange={setTab} />
@@ -397,12 +549,16 @@ export default function App() {
   );
 }
 
-function Header({ title, action = '⋮' }: { title: string; action?: string }) {
+function Header({ title, action = '⋮', onPress }: { title: string; action?: React.ReactNode; onPress?: () => void }) {
   return (
     <View style={styles.header}>
       <Text style={styles.headerTitle}>{title}</Text>
-      <TouchableOpacity accessibilityLabel="More options" style={styles.headerAction}>
-        <Text style={styles.headerActionText}>{action}</Text>
+      <TouchableOpacity accessibilityLabel={title + " Action"} onPress={onPress} style={styles.headerAction}>
+        {typeof action === 'string' ? (
+          <Text style={styles.headerActionText}>{action}</Text>
+        ) : (
+          action
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -420,7 +576,9 @@ function SegmentedControl({
       {[
         { key: 'all', icon: '', label: 'All' },
         { key: 'feed', icon: '♙', label: 'Feed' },
+        { key: 'sleep', icon: '☾', label: 'Sleep' },
         { key: 'diaper', icon: '♢', label: 'Diaper' },
+        { key: 'growth', icon: '⚖', label: 'Growth' },
       ].map((item) => (
         <TouchableOpacity
           key={item.key}
@@ -452,6 +610,8 @@ function HomeScreen({
   activeSleepStart,
   elapsedSeconds,
   formatElapsed,
+  notifications,
+  onPressNotifications,
 }: {
   baby: Baby | null;
   events: TimelineEvent[];
@@ -463,15 +623,47 @@ function HomeScreen({
   activeSleepStart: string | null;
   elapsedSeconds: number;
   formatElapsed: (secs: number) => string;
+  notifications: NotificationEntry[];
+  onPressNotifications: () => void;
 }) {
   const latestBottle = feedings.find((item) => item.quantity_ml);
   const today = new Date().toDateString();
   const todayDiapers = diapers.filter(
     (item) => new Date(item.changed_at).toDateString() === today,
   ).length;
+
+  const unreadCount = notifications.length;
+
   return (
     <View>
-      <Header title={baby ? `${baby.name}'s day` : 'BabyTracker'} action="✓" />
+      <Header
+        title={baby ? `${baby.name}'s day` : 'BabyTracker'}
+        onPress={onPressNotifications}
+        action={
+          <View style={{ position: 'relative' }}>
+            <Text style={styles.headerActionText}>🔔</Text>
+            {unreadCount > 0 && (
+              <View
+                style={{
+                  position: 'absolute',
+                  right: -4,
+                  top: -4,
+                  backgroundColor: '#E53E3E',
+                  borderRadius: 8,
+                  width: 16,
+                  height: 16,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1.5,
+                  borderColor: C.purple,
+                }}
+              >
+                <Text style={{ color: '#FFF', fontSize: 9, fontWeight: 'bold' }}>{unreadCount}</Text>
+              </View>
+            )}
+          </View>
+        }
+      />
       <View style={styles.connectionRow}>
         <View style={styles.onlineDot} />
         <Text style={styles.connectionText}>Live data · SQLite connected</Text>
@@ -534,6 +726,18 @@ function LogScreen({
   setSleepTrackingMode,
   elapsedSeconds,
   formatElapsed,
+  customTimeEnabled,
+  setCustomTimeEnabled,
+  customTime,
+  setCustomTime,
+  unitSystem,
+  setUnitSystem,
+  weightInput,
+  setWeightInput,
+  heightInput,
+  setHeightInput,
+  breastSide,
+  setBreastSide,
 }: {
   activity: Activity;
   setActivity: (value: Activity) => void;
@@ -555,6 +759,18 @@ function LogScreen({
   setSleepTrackingMode: (value: 'timer' | 'manual') => void;
   elapsedSeconds: number;
   formatElapsed: (secs: number) => string;
+  customTimeEnabled: boolean;
+  setCustomTimeEnabled: (value: boolean) => void;
+  customTime: string;
+  setCustomTime: (value: string) => void;
+  unitSystem: 'metric' | 'imperial';
+  setUnitSystem: (value: 'metric' | 'imperial') => void;
+  weightInput: string;
+  setWeightInput: (value: string) => void;
+  heightInput: string;
+  setHeightInput: (value: string) => void;
+  breastSide: 'Left' | 'Right';
+  setBreastSide: (value: 'Left' | 'Right') => void;
 }) {
   const options =
     activity === 'feed'
@@ -566,7 +782,7 @@ function LogScreen({
     <View>
       <Header title="Quick Log" />
       <View style={styles.activityTabs}>
-        {(Object.keys(activityMeta) as Activity[]).map((key) => (
+        {(Object.keys(activityMeta) as Activity[]).filter(key => key !== 'growth').map((key) => (
           <TouchableOpacity
             key={key}
             onPress={() => setActivity(key)}
@@ -613,33 +829,39 @@ function LogScreen({
         </View>
       )}
 
-      <Text style={styles.sectionTitle}>
-        {activity === 'feed' ? 'Feed Type' : activity === 'sleep' ? 'Sleep Type' : 'Diaper Type'}
-      </Text>
-      <View style={styles.typeRow}>
-        {options.map((type, index) => (
-          <TouchableOpacity
-            key={type}
-            onPress={() => {
-              setSubtype(type);
-              if (activity === 'feed') setFeedType(type as FeedType);
-            }}
-            style={[styles.typeCard, subtype === type && styles.typeCardActive]}
-          >
-            <View style={styles.typeIcon}>
-              <Text>{index === 0 ? activityMeta[activity].icon : index === 1 ? '♧' : '♢'}</Text>
-            </View>
-            <Text style={styles.typeLabel}>{type}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {activity !== 'growth' && (
+        <>
+          <Text style={styles.sectionTitle}>
+            {activity === 'feed' ? 'Feed Type' : activity === 'sleep' ? 'Sleep Type' : 'Diaper Type'}
+          </Text>
+          <View style={styles.typeRow}>
+            {options.map((type, index) => (
+              <TouchableOpacity
+                key={type}
+                onPress={() => {
+                  setSubtype(type);
+                  if (activity === 'feed') setFeedType(type as FeedType);
+                }}
+                style={[styles.typeCard, subtype === type && styles.typeCardActive]}
+              >
+                <View style={styles.typeIcon}>
+                  <Text>{index === 0 ? activityMeta[activity].icon : index === 1 ? '♧' : '♢'}</Text>
+                </View>
+                <Text style={styles.typeLabel}>{type}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      )}
 
       <View style={styles.trendCard}>
         <View style={styles.trendHeader}>
           <View style={styles.trendIcon}>
             <Text style={styles.white}>{activityMeta[activity].icon}</Text>
           </View>
-          <Text style={styles.trendTitle}>{activityMeta[activity].label}ing Trends</Text>
+          <Text style={styles.trendTitle}>
+            {activity === 'growth' ? 'Growth Tracking' : `${activityMeta[activity].label}ing Trends`}
+          </Text>
         </View>
 
         {activity === 'sleep' && sleepTrackingMode === 'timer' ? (
@@ -691,32 +913,193 @@ function LogScreen({
           )
         ) : (
           <View>
-            <View style={styles.formRow}>
-              {activity === 'feed' && subtype === 'Bottle' ? (
-                <View style={styles.formField}>
-                  <Text style={styles.inputLabel}>Amount (ml)</Text>
-                  <TextInput
-                    accessibilityLabel="Amount in milliliters"
-                    value={amount}
-                    onChangeText={setAmount}
-                    keyboardType="numeric"
-                    style={styles.input}
-                  />
+            {activity === 'growth' ? (
+              <View style={{ marginBottom: 10 }}>
+                {/* Unit system toggle */}
+                <Text style={styles.inputLabel}>Unit System</Text>
+                <View style={[styles.segmentRow, { marginBottom: 15 }]}>
+                  {[
+                    { key: 'metric', label: 'Metric (kg, cm)' },
+                    { key: 'imperial', label: 'Imperial (lbs, in)' },
+                  ].map((item) => (
+                    <TouchableOpacity
+                      key={item.key}
+                      onPress={() => setUnitSystem(item.key as 'metric' | 'imperial')}
+                      style={[
+                        styles.segment,
+                        unitSystem === item.key && styles.segmentActive,
+                        { flex: 1, height: 38, minWidth: 0, paddingHorizontal: 0, borderRadius: 19 },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          unitSystem === item.key && styles.white,
+                          { fontSize: 13, fontWeight: '700' },
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
-              ) : null}
-              {activity !== 'diaper' ? (
-                <View style={styles.formField}>
-                  <Text style={styles.inputLabel}>Duration (min)</Text>
-                  <TextInput
-                    accessibilityLabel="Duration in minutes"
-                    value={duration}
-                    onChangeText={setDuration}
-                    keyboardType="numeric"
-                    style={styles.input}
-                  />
+
+                {/* Weight & Height Input Fields */}
+                <View style={styles.formRow}>
+                  <View style={styles.formField}>
+                    <Text style={styles.inputLabel}>
+                      Weight {unitSystem === 'metric' ? '(kg)' : '(lbs)'}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Weight"
+                      value={weightInput}
+                      onChangeText={setWeightInput}
+                      keyboardType="numeric"
+                      placeholder={unitSystem === 'metric' ? 'e.g. 5.4' : 'e.g. 12.0'}
+                      placeholderTextColor="#A9A9A9"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={styles.formField}>
+                    <Text style={styles.inputLabel}>
+                      Height {unitSystem === 'metric' ? '(cm)' : '(in)'}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Height"
+                      value={heightInput}
+                      onChangeText={setHeightInput}
+                      keyboardType="numeric"
+                      placeholder={unitSystem === 'metric' ? 'e.g. 58.2' : 'e.g. 23.0'}
+                      placeholderTextColor="#A9A9A9"
+                      style={styles.input}
+                    />
+                  </View>
                 </View>
-              ) : null}
-            </View>
+              </View>
+            ) : (
+              <View style={styles.formRow}>
+                {activity === 'feed' && subtype === 'Bottle' ? (
+                  <View style={styles.formField}>
+                    <Text style={styles.inputLabel}>Amount (ml)</Text>
+                    <TextInput
+                      accessibilityLabel="Amount in milliliters"
+                      value={amount}
+                      onChangeText={setAmount}
+                      keyboardType="numeric"
+                      style={styles.input}
+                    />
+                  </View>
+                ) : null}
+                {activity === 'feed' && subtype === 'Breast' ? (
+                  <View style={styles.formField}>
+                    <Text style={styles.inputLabel}>Breast Side</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, height: 42 }}>
+                      {['Left', 'Right'].map((side) => (
+                        <TouchableOpacity
+                          key={side}
+                          onPress={() => setBreastSide(side as 'Left' | 'Right')}
+                          style={{
+                            flex: 1,
+                            backgroundColor: breastSide === side ? C.purple : '#EDEDEE',
+                            borderRadius: 8,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Text style={{ color: breastSide === side ? '#FFF' : C.muted, fontSize: 13, fontWeight: '700' }}>
+                            {side}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+                {activity !== 'diaper' ? (
+                  <View style={styles.formField}>
+                    <Text style={styles.inputLabel}>Duration (min)</Text>
+                    <TextInput
+                      accessibilityLabel="Duration in minutes"
+                      value={duration}
+                      onChangeText={setDuration}
+                      keyboardType="numeric"
+                      style={styles.input}
+                    />
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            {/* Custom Time Selector (Only for feed, sleep, and growth) */}
+            {(activity === 'feed' || activity === 'sleep' || activity === 'growth') && (
+              <View style={{ marginBottom: 15 }}>
+                <TouchableOpacity
+                  onPress={() => setCustomTimeEnabled(!customTimeEnabled)}
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+                >
+                  <View
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 4,
+                      borderWidth: 2,
+                      borderColor: C.purple,
+                      backgroundColor: customTimeEnabled ? C.purple : 'transparent',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 8,
+                    }}
+                  >
+                    {customTimeEnabled && <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>✓</Text>}
+                  </View>
+                  <Text style={{ fontSize: 14, color: C.ink, fontWeight: '600' }}>Set time of activity</Text>
+                </TouchableOpacity>
+
+                {customTimeEnabled && (
+                  <View style={{ backgroundColor: '#F8F8F8', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#EEE', marginBottom: 10 }}>
+                    <Text style={{ fontSize: 12, color: C.muted, fontWeight: '600', marginBottom: 4 }}>Start Time (HH:MM)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TextInput
+                        value={customTime}
+                        onChangeText={setCustomTime}
+                        placeholder="14:30"
+                        placeholderTextColor="#A9A9A9"
+                        style={[styles.input, { flex: 1, height: 40, marginBottom: 0 }]}
+                      />
+                      
+                      {/* Offset Helpers */}
+                      <View style={{ flexDirection: 'row', marginLeft: 8 }}>
+                        {[
+                          { label: '-5m', val: 5 },
+                          { label: '-15m', val: 15 },
+                          { label: '-30m', val: 30 },
+                          { label: '-1h', val: 60 }
+                        ].map(offset => (
+                          <TouchableOpacity
+                            key={offset.label}
+                            onPress={() => {
+                              const target = new Date(Date.now() - offset.val * 60 * 1000);
+                              const hh = String(target.getHours()).padStart(2, '0');
+                              const mm = String(target.getMinutes()).padStart(2, '0');
+                              setCustomTime(`${hh}:${mm}`);
+                            }}
+                            style={{
+                              backgroundColor: C.purpleSoft,
+                              paddingHorizontal: 8,
+                              paddingVertical: 8,
+                              borderRadius: 4,
+                              marginLeft: 4,
+                            }}
+                          >
+                            <Text style={{ color: C.purpleDark, fontSize: 11, fontWeight: '700' }}>{offset.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+
             <Text style={styles.inputLabel}>Notes (optional)</Text>
             <TextInput
               accessibilityLabel="Notes"
@@ -726,7 +1109,6 @@ function LogScreen({
               placeholderTextColor="#A9A9A9"
               style={[styles.input, styles.notesInput]}
             />
-            <MiniChart />
             <TouchableOpacity
               disabled={saving}
               style={[styles.logButton, saving && styles.buttonDisabled]}
@@ -745,22 +1127,7 @@ function LogScreen({
   );
 }
 
-function MiniChart() {
-  return (
-    <View style={styles.chart}>
-      <Text style={styles.chartMax}>200</Text>
-      <View style={styles.dashLine} />
-      <Text style={styles.chartMid}>120ml</Text>
-      <View style={styles.bars}>
-        {[52, 20, 38, 46, 30, 36].map((height, i) => (
-          <React.Fragment key={i}>
-            <View style={[styles.bar, { height, opacity: i === 0 ? 1 : 0.18 }]} />
-          </React.Fragment>
-        ))}
-      </View>
-    </View>
-  );
-}
+
 
 function HistoryScreen({ events }: { events: TimelineEvent[] }) {
   const recent = useMemo(() => events.slice(0, 12), [events]);
@@ -840,6 +1207,10 @@ function InsightsScreen({
   sleep: SleepSession[];
   onGenerate: () => Promise<void>;
 }) {
+  const [insightsTab, setInsightsTab] = useState<'daily' | 'weekly'>('daily');
+  const [weeklySummary, setWeeklySummary] = useState<AIWeeklySummary | null>(null);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
+  const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<string | null>(null);
   const [askLoading, setAskLoading] = useState(false);
@@ -854,6 +1225,20 @@ function InsightsScreen({
   const averageSleep = sleep.length
     ? Math.round(sleep.reduce((sum, item) => sum + (item.duration_minutes ?? 0), 0) / sleep.length)
     : 0;
+
+  const handleGenerateWeekly = async () => {
+    if (!baby || weeklyLoading) return;
+    setWeeklyLoading(true);
+    setWeeklyError(null);
+    try {
+      const data = await api.getWeeklySummary(baby.id);
+      setWeeklySummary(data);
+    } catch {
+      setWeeklyError('Could not generate weekly summary. Check backend connection.');
+    } finally {
+      setWeeklyLoading(false);
+    }
+  };
 
   const submitQuestion = async () => {
     if (!baby || !question.trim() || askLoading) return;
@@ -871,109 +1256,962 @@ function InsightsScreen({
   };
 
   return (
-    <View>
-      <Header title="Insights" action="✦" />
+    <View style={{ paddingBottom: 40 }}>
+      <Header title="Insights" action="▥" />
       <Text style={styles.heroTitle}>Small patterns.{`\n`}Meaningful progress.</Text>
-      <View style={styles.insightCard}>
-        <Text style={styles.insightEyebrow}>LIVE SUMMARY</Text>
-        <Text style={styles.insightNumber}>{feedings.length}</Text>
-        <Text style={styles.insightUnit}>feedings logged</Text>
-        <Text style={styles.insightCopy}>
-          {insight?.summary ??
-            'Generate a personalized summary from the feeding and sleep entries stored in the database.'}
-        </Text>
+
+      {/* Daily/Weekly Segment Toggle */}
+      <View style={styles.segmentRow}>
+        <TouchableOpacity
+          onPress={() => setInsightsTab('daily')}
+          style={[styles.segment, insightsTab === 'daily' && styles.segmentActive, { flex: 1, height: 42, minWidth: 0, paddingHorizontal: 0, borderRadius: 21 }]}
+        >
+          <Text style={[styles.segmentText, insightsTab === 'daily' && styles.white, { fontSize: 13, fontWeight: '700' }]}>
+            Daily Insights
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setInsightsTab('weekly')}
+          style={[styles.segment, insightsTab === 'weekly' && styles.segmentActive, { flex: 1, height: 42, minWidth: 0, paddingHorizontal: 0, borderRadius: 21 }]}
+        >
+          <Text style={[styles.segmentText, insightsTab === 'weekly' && styles.white, { fontSize: 13, fontWeight: '700' }]}>
+            Weekly Summary
+          </Text>
+        </TouchableOpacity>
       </View>
-      <View style={styles.insightRow}>
-        <View style={styles.insightMini}>
-          <Text style={styles.miniNumber}>{averageSleep}m</Text>
-          <Text style={styles.miniLabel}>Average sleep</Text>
-        </View>
-        <View style={styles.insightMini}>
-          <Text style={styles.miniNumber}>{averageBottle}ml</Text>
-          <Text style={styles.miniLabel}>Average bottle</Text>
-        </View>
-      </View>
-      {insight && (
-        <View style={styles.recommendationCard}>
-          <Text style={styles.recommendationTitle}>Recommended next steps</Text>
-          {insight.recommendations.map((item, index) => (
-            <React.Fragment key={item}>
-              <Text style={styles.recommendationText}>
-                {index + 1}. {item}
+
+      {/* DAILY INSIGHTS VIEW */}
+      {insightsTab === 'daily' && (
+        <View>
+          <View style={styles.insightCard}>
+            <Text style={styles.insightEyebrow}>LIVE SUMMARY</Text>
+            <Text style={styles.insightNumber}>{feedings.length}</Text>
+            <Text style={styles.insightUnit}>feedings logged</Text>
+            <Text style={styles.insightCopy}>
+              {insight?.summary ??
+                'Generate a personalized summary from the feeding and sleep entries stored in the database.'}
+            </Text>
+          </View>
+          <View style={styles.insightRow}>
+            <View style={styles.insightMini}>
+              <Text style={styles.miniNumber}>{averageSleep}m</Text>
+              <Text style={styles.miniLabel}>Average sleep</Text>
+            </View>
+            <View style={styles.insightMini}>
+              <Text style={styles.miniNumber}>{averageBottle}ml</Text>
+              <Text style={styles.miniLabel}>Average bottle</Text>
+            </View>
+          </View>
+          {insight && (
+            <View style={styles.recommendationCard}>
+              <Text style={styles.recommendationTitle}>Recommended next steps</Text>
+              {insight.recommendations.map((item, index) => (
+                <React.Fragment key={item}>
+                  <Text style={styles.recommendationText}>
+                    {index + 1}. {item}
+                  </Text>
+                </React.Fragment>
+              ))}
+            </View>
+          )}
+          <TouchableOpacity
+            disabled={loading}
+            style={[styles.logButton, styles.insightButton, loading && styles.buttonDisabled]}
+            onPress={() => void onGenerate()}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <Text style={styles.logButtonText}>
+                {insight ? 'Refresh AI insights' : 'Generate AI insights'}
               </Text>
-            </React.Fragment>
-          ))}
+            )}
+          </TouchableOpacity>
+
+          {/* Ask AI Parenting Assistant */}
+          <View style={styles.askSectionCard}>
+            <Text style={styles.askTitle}>Ask the AI Assistant</Text>
+            <Text style={styles.askSubtitle}>
+              Ask any parenting question — Gemini will answer using {baby?.name ?? 'your baby'}'s logs.
+            </Text>
+            <View style={styles.askInputContainer}>
+              <TextInput
+                accessibilityLabel="Parenting question input"
+                value={question}
+                onChangeText={setQuestion}
+                placeholder="e.g. Is Charlie sleeping enough?"
+                placeholderTextColor="#A9A9A9"
+                style={styles.askInput}
+                editable={!askLoading}
+              />
+              <TouchableOpacity
+                accessibilityLabel="Submit question"
+                disabled={askLoading || !question.trim()}
+                onPress={() => void submitQuestion()}
+                style={[
+                  styles.askSubmitButton,
+                  { width: 46, opacity: askLoading || !question.trim() ? 0.5 : 1 },
+                ]}
+              >
+                {askLoading ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={styles.askSubmitButtonText}>→</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            {askError && (
+              <View style={styles.askErrorBox}>
+                <Text style={styles.askErrorText}>{askError}</Text>
+              </View>
+            )}
+            {answer && (
+              <View style={styles.answerBox}>
+                <View style={styles.answerHeaderRow}>
+                  <Text style={styles.answerTitle}>AI Response</Text>
+                  <TouchableOpacity
+                    accessibilityLabel="Clear answer"
+                    onPress={() => {
+                      setAnswer(null);
+                      setQuestion('');
+                    }}
+                  >
+                    <Text style={styles.clearText}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.answerContentText, { marginTop: 10 }]}>{answer}</Text>
+              </View>
+            )}
+          </View>
         </View>
       )}
-      <TouchableOpacity
-        disabled={loading}
-        style={[styles.logButton, styles.insightButton, loading && styles.buttonDisabled]}
-        onPress={() => void onGenerate()}
-      >
-        {loading ? (
-          <ActivityIndicator color="#FFF" />
-        ) : (
-          <Text style={styles.logButtonText}>
-            {insight ? 'Refresh AI insights' : 'Generate AI insights'}
-          </Text>
-        )}
-      </TouchableOpacity>
 
-      {/* Ask AI Parenting Assistant */}
-      <View style={styles.askSectionCard}>
-        <Text style={styles.askTitle}>Ask the AI Assistant</Text>
-        <Text style={styles.askSubtitle}>
-          Ask any parenting question — Gemini will answer using {baby?.name ?? 'your baby'}'s logs.
-        </Text>
-        <View style={styles.askInputContainer}>
-          <TextInput
-            accessibilityLabel="Parenting question input"
-            value={question}
-            onChangeText={setQuestion}
-            placeholder="e.g. Is Charlie sleeping enough?"
-            placeholderTextColor="#A9A9A9"
-            style={styles.askInput}
-            editable={!askLoading}
-          />
+      {/* WEEKLY SUMMARY VIEW */}
+      {insightsTab === 'weekly' && (
+        <View>
+          {weeklyError && (
+            <View style={styles.askErrorBox}>
+              <Text style={styles.askErrorText}>{weeklyError}</Text>
+            </View>
+          )}
+
+          <View style={[styles.insightCard, { backgroundColor: C.purpleDark }]}>
+            <Text style={styles.insightEyebrow}>WEEKLY SUMMARY</Text>
+            <Text style={styles.insightCopy}>
+              {weeklySummary?.summary ??
+                'Generate a comprehensive weekly summary of all feeding, sleep, diaper, and growth logs.'}
+            </Text>
+          </View>
+
+          {weeklySummary && (
+            <View style={{ gap: 12, marginTop: 14 }}>
+              <View style={styles.insightMini}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: C.purpleDark, marginBottom: 6 }}>🍏 Feeding Analysis</Text>
+                <Text style={{ fontSize: 13, color: '#333', lineHeight: 18 }}>{weeklySummary.feeding_insights}</Text>
+              </View>
+              <View style={styles.insightMini}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: C.purpleDark, marginBottom: 6 }}>☾ Sleep Analysis</Text>
+                <Text style={{ fontSize: 13, color: '#333', lineHeight: 18 }}>{weeklySummary.sleep_insights}</Text>
+              </View>
+              <View style={styles.insightMini}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: C.purpleDark, marginBottom: 6 }}>⚖ Growth Analysis</Text>
+                <Text style={{ fontSize: 13, color: '#333', lineHeight: 18 }}>{weeklySummary.growth_insights}</Text>
+              </View>
+            </View>
+          )}
+
+          {weeklySummary && (
+            <View style={styles.recommendationCard}>
+              <Text style={styles.recommendationTitle}>Weekly Recommendations</Text>
+              {weeklySummary.recommendations.map((item, index) => (
+                <React.Fragment key={item}>
+                  <Text style={styles.recommendationText}>
+                    {index + 1}. {item}
+                  </Text>
+                </React.Fragment>
+              ))}
+            </View>
+          )}
+
           <TouchableOpacity
-            accessibilityLabel="Submit question"
-            disabled={askLoading || !question.trim()}
-            onPress={() => void submitQuestion()}
-            style={[
-              styles.askSubmitButton,
-              { width: 46, opacity: askLoading || !question.trim() ? 0.5 : 1 },
-            ]}
+            disabled={weeklyLoading}
+            style={[styles.logButton, styles.insightButton, weeklyLoading && styles.buttonDisabled]}
+            onPress={() => void handleGenerateWeekly()}
           >
-            {askLoading ? (
-              <ActivityIndicator color="#FFF" size="small" />
+            {weeklyLoading ? (
+              <ActivityIndicator color="#FFF" />
             ) : (
-              <Text style={styles.askSubmitButtonText}>→</Text>
+              <Text style={styles.logButtonText}>
+                {weeklySummary ? 'Refresh Weekly Summary' : 'Generate Weekly Summary'}
+              </Text>
             )}
           </TouchableOpacity>
         </View>
-        {askError && (
-          <View style={styles.askErrorBox}>
-            <Text style={styles.askErrorText}>{askError}</Text>
-          </View>
-        )}
-        {answer && (
-          <View style={styles.answerBox}>
-            <View style={styles.answerHeaderRow}>
-              <Text style={styles.answerTitle}>AI Response</Text>
+      )}
+    </View>
+  );
+}
+
+function MilestonesScreen({
+  baby,
+}: {
+  baby: Baby | null;
+}) {
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Custom Milestone Form State
+  const [showAddCustom, setShowAddCustom] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customNotes, setCustomNotes] = useState('');
+  
+  // Edit/Check modal state
+  const [activeMilestoneName, setActiveMilestoneName] = useState<string | null>(null);
+  const [activeMilestoneNotes, setActiveMilestoneNotes] = useState('');
+
+  // Default CDC Milestones
+  const defaultCDC = [
+    { name: 'Social Smile', age: '2 months' },
+    { name: 'Cooing/Vocalizing', age: '2 months' },
+    { name: 'Rolling Over', age: '5 months' },
+    { name: 'Sitting Up', age: '6 months' },
+    { name: 'Crawling', age: '9 months' },
+    { name: 'First Words', age: '12 months' },
+    { name: 'First Steps', age: '12 months' },
+  ];
+
+  const loadMilestones = async () => {
+    if (!baby) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.listMilestones(baby.id);
+      setMilestones(data);
+    } catch (err) {
+      setError('Could not load milestones. Check backend connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadMilestones();
+  }, [baby]);
+
+  const handleToggleCDC = async (name: string) => {
+    if (!baby) return;
+    const existing = milestones.find(m => m.name.toLowerCase() === name.toLowerCase());
+    
+    if (existing) {
+      // Uncheck / delete
+      try {
+        await api.deleteMilestone(existing.id);
+        setMilestones(prev => prev.filter(m => m.id !== existing.id));
+      } catch {
+        setError('Could not delete milestone.');
+      }
+    } else {
+      // Check / Add (Open inline dialog to save)
+      setActiveMilestoneName(name);
+      setActiveMilestoneNotes('');
+    }
+  };
+
+  const handleSaveMilestone = async () => {
+    if (!baby || !activeMilestoneName) return;
+    try {
+      const created = await api.createMilestone({
+        baby_id: baby.id,
+        name: activeMilestoneName,
+        achieved_at: new Date().toISOString().split('T')[0],
+        notes: activeMilestoneNotes || null,
+      });
+      setMilestones(prev => [...prev, created]);
+      setActiveMilestoneName(null);
+      setActiveMilestoneNotes('');
+    } catch {
+      setError('Could not save milestone.');
+    }
+  };
+
+  const handleSaveCustom = async () => {
+    if (!baby || !customName.trim()) return;
+    try {
+      const created = await api.createMilestone({
+        baby_id: baby.id,
+        name: customName.trim(),
+        achieved_at: new Date().toISOString().split('T')[0],
+        notes: customNotes || null,
+      });
+      setMilestones(prev => [...prev, created]);
+      setCustomName('');
+      setCustomNotes('');
+      setShowAddCustom(false);
+    } catch {
+      setError('Could not save custom milestone.');
+    }
+  };
+
+  return (
+    <View style={{ paddingBottom: 40 }}>
+      <Header title="Milestones" action="⚐" />
+      <Text style={styles.heroTitle}>Celebrate the{`\n`}small steps.</Text>
+      
+      {error && (
+        <View style={styles.askErrorBox}>
+          <Text style={styles.askErrorText}>{error}</Text>
+        </View>
+      )}
+
+      {/* CDC Predefined Milestones */}
+      <Text style={styles.sectionTitle}>Developmental Checklist</Text>
+      <View style={{ backgroundColor: C.card, borderRadius: 24, padding: 18, marginBottom: 20 }}>
+        {defaultCDC.map(item => {
+          const matched = milestones.find(m => m.name.toLowerCase() === item.name.toLowerCase());
+          return (
+            <View key={item.name} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: C.ink }}>{item.name}</Text>
+                <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Typical age: {item.age}</Text>
+                {matched?.notes && (
+                  <Text style={{ fontSize: 12, color: C.purpleDark, fontStyle: 'italic', marginTop: 4 }}>Note: {matched.notes}</Text>
+                )}
+              </View>
               <TouchableOpacity
-                accessibilityLabel="Clear answer"
-                onPress={() => {
-                  setAnswer(null);
-                  setQuestion('');
+                onPress={() => void handleToggleCDC(item.name)}
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 6,
+                  borderWidth: 2.5,
+                  borderColor: C.purple,
+                  backgroundColor: matched ? C.purple : 'transparent',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                <Text style={styles.clearText}>Clear</Text>
+                {matched && <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>✓</Text>}
               </TouchableOpacity>
             </View>
-            <Text style={[styles.answerContentText, { marginTop: 10 }]}>{answer}</Text>
+          );
+        })}
+      </View>
+
+      {/* Inline notes dialog for checklist milestones */}
+      {activeMilestoneName && (
+        <View style={{ backgroundColor: C.purpleSoft, borderRadius: 20, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#DDB8EE' }}>
+          <Text style={{ fontSize: 15, fontWeight: '800', color: C.purpleDark, marginBottom: 4 }}>
+            Celebrate {activeMilestoneName}!
+          </Text>
+          <Text style={{ fontSize: 12, color: C.ink, marginBottom: 12 }}>
+            Add any notes about this milestone (optional).
+          </Text>
+          <TextInput
+            value={activeMilestoneNotes}
+            onChangeText={setActiveMilestoneNotes}
+            placeholder="e.g. He smiled at mommy for the first time!"
+            placeholderTextColor="#A9A9A9"
+            style={[styles.input, { backgroundColor: '#FFF', marginBottom: 12 }]}
+          />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => void handleSaveMilestone()}
+              style={{ backgroundColor: C.purple, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, flex: 1, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 13 }}>Mark as Achieved</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setActiveMilestoneName(null)}
+              style={{ backgroundColor: '#FFF', borderWidth: 1, borderColor: '#CCC', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, flex: 1, alignItems: 'center' }}
+            >
+              <Text style={{ color: C.ink, fontWeight: '600', fontSize: 13 }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Custom Milestones list */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Text style={styles.sectionTitle}>Custom Achievements</Text>
+        <TouchableOpacity
+          onPress={() => setShowAddCustom(!showAddCustom)}
+          style={{ backgroundColor: C.purpleSoft, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }}
+        >
+          <Text style={{ color: C.purpleDark, fontWeight: '700', fontSize: 12 }}>+ Add New</Text>
+        </TouchableOpacity>
+      </View>
+
+      {showAddCustom && (
+        <View style={{ backgroundColor: C.card, borderRadius: 20, padding: 18, marginBottom: 20 }}>
+          <Text style={styles.inputLabel}>Milestone Name</Text>
+          <TextInput
+            value={customName}
+            onChangeText={setCustomName}
+            placeholder="e.g. Rolled from back to tummy"
+            placeholderTextColor="#A9A9A9"
+            style={styles.input}
+          />
+          <Text style={styles.inputLabel}>Notes</Text>
+          <TextInput
+            value={customNotes}
+            onChangeText={setCustomNotes}
+            placeholder="Add some details..."
+            placeholderTextColor="#A9A9A9"
+            style={styles.input}
+          />
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+            <TouchableOpacity
+              disabled={!customName.trim()}
+              onPress={() => void handleSaveCustom()}
+              style={[styles.logButton, { flex: 1, marginTop: 0 }, !customName.trim() && styles.buttonDisabled]}
+            >
+              <Text style={styles.logButtonText}>Save Milestone</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowAddCustom(false)}
+              style={{ backgroundColor: '#ECECEC', borderRadius: 24, flex: 1, justifyContent: 'center', alignItems: 'center' }}
+            >
+              <Text style={{ color: C.ink, fontWeight: '700' }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Display other/custom milestones */}
+      <View>
+        {milestones
+          .filter(m => !defaultCDC.some(d => d.name.toLowerCase() === m.name.toLowerCase()))
+          .map(m => (
+            <View key={m.id} style={{ backgroundColor: C.card, borderRadius: 16, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: C.ink }}>{m.name}</Text>
+                {m.achieved_at && (
+                  <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                    Achieved: {new Date(m.achieved_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </Text>
+                )}
+                {m.notes && (
+                  <Text style={{ fontSize: 12, color: '#555', marginTop: 4 }}>{m.notes}</Text>
+                )}
+              </View>
+              <TouchableOpacity
+                onPress={async () => {
+                  try {
+                    await api.deleteMilestone(m.id);
+                    setMilestones(prev => prev.filter(item => item.id !== m.id));
+                  } catch {
+                    setError('Could not delete milestone.');
+                  }
+                }}
+                style={{ padding: 6 }}
+              >
+                <Text style={{ color: '#E53E3E', fontSize: 16 }}>🗑</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        {milestones.filter(m => !defaultCDC.some(d => d.name.toLowerCase() === m.name.toLowerCase())).length === 0 && !showAddCustom && (
+          <Text style={{ fontSize: 12, color: C.muted, textAlign: 'center', paddingVertical: 10 }}>No custom achievements logged yet.</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function GrowthScreen({
+  baby,
+  growth,
+  unitSystem,
+  setUnitSystem,
+  onRefreshData,
+}: {
+  baby: Baby | null;
+  growth: GrowthRecord[];
+  unitSystem: 'metric' | 'imperial';
+  setUnitSystem: (value: 'metric' | 'imperial') => void;
+  onRefreshData: () => void;
+}) {
+  const [showModal, setShowModal] = useState(false);
+  const [weight, setWeight] = useState('');
+  const [height, setHeight] = useState('');
+  const [notes, setNotes] = useState('');
+  const [customDateStr, setCustomDateStr] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+
+  const [chartMetric, setChartMetric] = useState<'weight' | 'height'>('weight');
+
+  const sorted = useMemo(
+    () => [...growth].sort((a, b) => Date.parse(a.recorded_at) - Date.parse(b.recorded_at)),
+    [growth],
+  );
+
+  const latest = sorted[sorted.length - 1] ?? null;
+  const previous = sorted[sorted.length - 2] ?? null;
+
+  useEffect(() => {
+    if (showModal) {
+      setWeight('');
+      setHeight('');
+      setNotes('');
+      setLogError(null);
+      const d = new Date();
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      setCustomDateStr(`${dd}/${mm}/${yyyy}`);
+    }
+  }, [showModal]);
+
+  const displayWeight = (kg: number | null | undefined) => {
+    if (kg == null) return '—';
+    return unitSystem === 'metric'
+      ? `${kg.toFixed(2)} kg`
+      : `${(kg * 2.20462).toFixed(2)} lbs`;
+  };
+  const displayHeight = (cm: number | null | undefined) => {
+    if (cm == null) return '—';
+    return unitSystem === 'metric'
+      ? `${cm.toFixed(1)} cm`
+      : `${(cm / 2.54).toFixed(1)} in`;
+  };
+
+  const parseDateString = (str: string): Date | null => {
+    const parts = str.trim().split('/');
+    if (parts.length !== 3) return null;
+    const day = Number(parts[0]);
+    const month = Number(parts[1]) - 1; // 0-indexed month
+    const year = Number(parts[2]);
+    if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+    if (day < 1 || day > 31 || month < 0 || month > 11 || year < 2000 || year > 2100) {
+      return null;
+    }
+    const d = new Date(year, month, day, 12, 0, 0, 0); // midday to avoid timezone shifts
+    if (d.getFullYear() !== year || d.getMonth() !== month || d.getDate() !== day) {
+      return null;
+    }
+    return d;
+  };
+
+  const handleSubmit = async () => {
+    if (!baby || saving) return;
+    setSaving(true);
+    setLogError(null);
+    let w_kg: number | null = null;
+    let h_cm: number | null = null;
+    if (weight.trim()) {
+      const w_val = Number(weight);
+      if (isNaN(w_val) || w_val <= 0) {
+        setLogError('Weight must be a valid positive number');
+        setSaving(false);
+        return;
+      }
+      w_kg = unitSystem === 'metric' ? w_val : w_val / 2.20462;
+    }
+    if (height.trim()) {
+      const h_val = Number(height);
+      if (isNaN(h_val) || h_val <= 0) {
+        setLogError('Height must be a valid positive number');
+        setSaving(false);
+        return;
+      }
+      h_cm = unitSystem === 'metric' ? h_val : h_val * 2.54;
+    }
+    if (w_kg === null && h_cm === null) {
+      setLogError('Please enter at least one metric (weight or height).');
+      setSaving(false);
+      return;
+    }
+    const parsedDate = parseDateString(customDateStr);
+    if (!parsedDate) {
+      setLogError('Please enter a valid date in DD/MM/YYYY format');
+      setSaving(false);
+      return;
+    }
+    const growthTime = parsedDate;
+    try {
+      await api.createGrowth({
+        baby_id: baby.id,
+        recorded_at: growthTime.toISOString(),
+        weight_kg: w_kg,
+        height_cm: h_cm,
+        notes: notes || null,
+      });
+      setShowModal(false);
+      onRefreshData();
+    } catch (err) {
+      setLogError('Could not save growth entry. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Build chart data from sorted records
+  const chartData = useMemo(() => {
+    const relevant = sorted.filter(r =>
+      chartMetric === 'weight' ? r.weight_kg != null : r.height_cm != null,
+    );
+    return relevant.slice(-8); // show last 8 entries
+  }, [sorted, chartMetric]);
+
+  const chartValues = chartData.map(r =>
+    chartMetric === 'weight' ? (r.weight_kg ?? 0) : (r.height_cm ?? 0),
+  );
+  const maxVal = Math.max(...chartValues, 0.01);
+  const minVal = Math.min(...chartValues, 0);
+  const range = maxVal - minVal || 1;
+  const BAR_HEIGHT = 120;
+
+  const formatChartLabel = (r: GrowthRecord) => {
+    const d = new Date(r.recorded_at);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  const latestWeightDelta = () => {
+    if (!latest?.weight_kg || !previous?.weight_kg) return null;
+    const diff = latest.weight_kg - previous.weight_kg;
+    const diffDisplay = unitSystem === 'metric'
+      ? `${diff > 0 ? '+' : ''}${diff.toFixed(2)} kg`
+      : `${diff > 0 ? '+' : ''}${(diff * 2.20462).toFixed(2)} lbs`;
+    return diffDisplay;
+  };
+
+  const latestHeightDelta = () => {
+    if (!latest?.height_cm || !previous?.height_cm) return null;
+    const diff = latest.height_cm - previous.height_cm;
+    const diffDisplay = unitSystem === 'metric'
+      ? `${diff > 0 ? '+' : ''}${diff.toFixed(1)} cm`
+      : `${diff > 0 ? '+' : ''}${(diff / 2.54).toFixed(1)} in`;
+    return diffDisplay;
+  };
+
+  return (
+    <View style={{ paddingBottom: 40 }}>
+      <Header title="Growth" action="⚖" />
+      <Text style={styles.heroTitle}>
+        {baby ? `${baby.name}'s` : 'Baby'}{'\n'}Growth Journey
+      </Text>
+
+      {/* Summary cards */}
+      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
+        <View style={[styles.insightMini, { flex: 1 }]}>
+          <Text style={{ fontSize: 11, fontWeight: '800', color: C.muted, letterSpacing: 1, marginBottom: 6 }}>WEIGHT</Text>
+          <Text style={{ fontSize: 22, fontWeight: '800', color: C.ink }}>{displayWeight(latest?.weight_kg)}</Text>
+          {latestWeightDelta() && (
+            <Text style={{ fontSize: 11, color: '#38B86A', fontWeight: '700', marginTop: 4 }}>
+              {latestWeightDelta()} since last
+            </Text>
+          )}
+        </View>
+        <View style={[styles.insightMini, { flex: 1 }]}>
+          <Text style={{ fontSize: 11, fontWeight: '800', color: C.muted, letterSpacing: 1, marginBottom: 6 }}>HEIGHT</Text>
+          <Text style={{ fontSize: 22, fontWeight: '800', color: C.ink }}>{displayHeight(latest?.height_cm)}</Text>
+          {latestHeightDelta() && (
+            <Text style={{ fontSize: 11, color: '#38B86A', fontWeight: '700', marginTop: 4 }}>
+              {latestHeightDelta()} since last
+            </Text>
+          )}
+        </View>
+      </View>
+
+      {/* Chart section */}
+      <View style={{ backgroundColor: C.card, borderRadius: 26, padding: 18, marginBottom: 20 }}>
+        {/* Toggle weight/height chart */}
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {(['weight', 'height'] as const).map(metric => (
+            <TouchableOpacity
+              key={metric}
+              onPress={() => setChartMetric(metric)}
+              style={{
+                flex: 1,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: chartMetric === metric ? C.purple : '#EDEDEE',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Text style={{ color: chartMetric === metric ? '#FFF' : C.muted, fontSize: 13, fontWeight: '700' }}>
+                {metric === 'weight' ? `⚖ Weight` : `↕ Height`}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {chartData.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+            <Text style={{ fontSize: 32, marginBottom: 10 }}>📏</Text>
+            <Text style={{ fontSize: 14, color: C.muted, textAlign: 'center' }}>
+              No {chartMetric} data yet.{'\n'}Log your first entry below.
+            </Text>
+          </View>
+        ) : (
+          <View>
+            {/* Y-axis max */}
+            <Text style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>
+              {chartMetric === 'weight' ? displayWeight(maxVal) : displayHeight(maxVal)}
+            </Text>
+            {/* Bars */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: BAR_HEIGHT, gap: 6, marginBottom: 6 }}>
+              {chartData.map((r, i) => {
+                const val = chartMetric === 'weight' ? (r.weight_kg ?? 0) : (r.height_cm ?? 0);
+                const barH = Math.max(4, ((val - minVal) / range) * BAR_HEIGHT);
+                const isLatest = i === chartData.length - 1;
+                return (
+                  <View key={r.id} style={{ flex: 1, alignItems: 'center' }}>
+                    {isLatest && (
+                      <Text style={{ fontSize: 9, fontWeight: '700', color: C.purpleDark, marginBottom: 2 }}>
+                        {chartMetric === 'weight' ? displayWeight(val) : displayHeight(val)}
+                      </Text>
+                    )}
+                    <View
+                      style={{
+                        width: '100%',
+                        height: barH,
+                        borderTopLeftRadius: 6,
+                        borderTopRightRadius: 6,
+                        backgroundColor: isLatest ? C.purple : '#DDB8EE',
+                      }}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+            {/* X-axis labels */}
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              {chartData.map((r) => (
+                <Text key={r.id} style={{ flex: 1, fontSize: 9, color: C.muted, textAlign: 'center' }}>
+                  {formatChartLabel(r)}
+                </Text>
+              ))}
+            </View>
+            {/* Y-axis min */}
+            <Text style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
+              {chartMetric === 'weight' ? displayWeight(minVal) : displayHeight(minVal)}
+            </Text>
           </View>
         )}
       </View>
+
+      {/* Log button */}
+      <TouchableOpacity style={styles.logButton} onPress={() => setShowModal(true)}>
+        <Text style={styles.logButtonText}>+ Log Growth Entry</Text>
+      </TouchableOpacity>
+
+      {/* Entry history */}
+      {sorted.length > 0 && (
+        <View style={{ marginTop: 24 }}>
+          <Text style={styles.sectionTitle}>All Entries</Text>
+          {[...sorted].reverse().map(r => (
+            <View
+              key={r.id}
+              style={{
+                backgroundColor: C.card,
+                borderRadius: 18,
+                padding: 14,
+                marginBottom: 10,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <View
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  backgroundColor: C.purpleSoft,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 20 }}>⚖</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: C.ink }}>
+                  {r.weight_kg != null ? displayWeight(r.weight_kg) : ''}
+                  {r.weight_kg != null && r.height_cm != null ? ' · ' : ''}
+                  {r.height_cm != null ? displayHeight(r.height_cm) : ''}
+                </Text>
+                <Text style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                  {new Date(r.recorded_at).toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                  })}{' '}
+                  {new Date(r.recorded_at).toLocaleTimeString(undefined, {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                </Text>
+                {r.notes && (
+                  <Text style={{ fontSize: 11, color: '#666', marginTop: 2, fontStyle: 'italic' }}>
+                    {r.notes}
+                  </Text>
+                )}
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {sorted.length === 0 && (
+        <View style={[styles.emptyCard, { marginTop: 24 }]}>
+          <Text style={styles.emptyTitle}>No growth entries yet</Text>
+          <Text style={styles.emptyCopy}>Tap the button above to log weight or height.</Text>
+        </View>
+      )}
+
+      {/* Floating Log Modal */}
+      <Modal visible={showModal} animationType="slide" transparent={true}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: '#FFF', borderRadius: 24, width: '100%', maxWidth: 450, padding: 22, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 }}>
+            
+            {/* Modal Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: C.ink }}>Log Growth Entry</Text>
+              <TouchableOpacity onPress={() => setShowModal(false)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 18, color: C.muted, fontWeight: 'bold' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Error banner */}
+            {logError && (
+              <View style={{ backgroundColor: '#FEE2E2', borderRadius: 12, padding: 10, marginBottom: 15 }}>
+                <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '600' }}>{logError}</Text>
+              </View>
+            )}
+
+            {/* Unit System Toggle */}
+            <Text style={styles.inputLabel}>Unit System</Text>
+            <View style={[styles.segmentRow, { marginBottom: 15 }]}>
+              {[
+                { key: 'metric', label: 'Metric (kg, cm)' },
+                { key: 'imperial', label: 'Imperial (lbs, in)' },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.key}
+                  onPress={() => setUnitSystem(item.key as 'metric' | 'imperial')}
+                  style={[
+                    styles.segment,
+                    unitSystem === item.key && styles.segmentActive,
+                    { flex: 1, height: 38, minWidth: 0, paddingHorizontal: 0, borderRadius: 19 },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      unitSystem === item.key && styles.white,
+                      { fontSize: 13, fontWeight: '700' },
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Numeric Input Fields */}
+            <View style={styles.formRow}>
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>
+                  Weight {unitSystem === 'metric' ? '(kg)' : '(lbs)'}
+                </Text>
+                <TextInput
+                  accessibilityLabel="Weight"
+                  value={weight}
+                  onChangeText={setWeight}
+                  keyboardType="numeric"
+                  placeholder={unitSystem === 'metric' ? 'e.g. 5.4' : 'e.g. 12.0'}
+                  placeholderTextColor="#A9A9A9"
+                  style={styles.input}
+                />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>
+                  Height {unitSystem === 'metric' ? '(cm)' : '(in)'}
+                </Text>
+                <TextInput
+                  accessibilityLabel="Height"
+                  value={height}
+                  onChangeText={setHeight}
+                  keyboardType="numeric"
+                  placeholder={unitSystem === 'metric' ? 'e.g. 58.2' : 'e.g. 23.0'}
+                  placeholderTextColor="#A9A9A9"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            {/* Custom Date Selector */}
+            <View style={{ marginBottom: 15, marginTop: 10 }}>
+              <Text style={styles.inputLabel}>Date of Activity (DD/MM/YYYY)</Text>
+              <TextInput
+                value={customDateStr}
+                onChangeText={setCustomDateStr}
+                placeholder="DD/MM/YYYY"
+                placeholderTextColor="#A9A9A9"
+                style={styles.input}
+              />
+              
+              {/* Quick Offset Helpers */}
+              <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                {[
+                  { label: 'Today', offsetDays: 0 },
+                  { label: 'Yesterday', offsetDays: 1 },
+                  { label: '3 days ago', offsetDays: 3 },
+                ].map(helper => (
+                  <TouchableOpacity
+                    key={helper.label}
+                    onPress={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() - helper.offsetDays);
+                      const dd = String(d.getDate()).padStart(2, '0');
+                      const mm = String(d.getMonth() + 1).padStart(2, '0');
+                      const yyyy = d.getFullYear();
+                      setCustomDateStr(`${dd}/${mm}/${yyyy}`);
+                    }}
+                    style={{
+                      backgroundColor: C.purpleSoft,
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: 8,
+                    }}
+                  >
+                    <Text style={{ color: C.purpleDark, fontSize: 11, fontWeight: '700' }}>{helper.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Notes */}
+            <Text style={styles.inputLabel}>Notes (optional)</Text>
+            <TextInput
+              accessibilityLabel="Notes"
+              value={notes}
+              onChangeText={setNotes}
+              placeholder="Add a useful detail"
+              placeholderTextColor="#A9A9A9"
+              style={[styles.input, styles.notesInput, { marginBottom: 20 }]}
+            />
+
+            {/* Submit Button */}
+            <TouchableOpacity
+              disabled={saving}
+              style={[styles.logButton, saving && styles.buttonDisabled]}
+              onPress={() => void handleSubmit()}
+            >
+              {saving ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <Text style={styles.logButtonText}>Save Growth</Text>
+              )}
+            </TouchableOpacity>
+
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -992,8 +2230,9 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (tab: Tab) => 
   const items: { key: Tab; icon: string; label: string }[] = [
     { key: 'home', icon: '⌂', label: 'Home' },
     { key: 'log', icon: '+', label: 'Log' },
-    { key: 'history', icon: '◴', label: 'History' },
+    { key: 'growth', icon: '⚖', label: 'Growth' },
     { key: 'insights', icon: '▥', label: 'Insights' },
+    { key: 'milestones', icon: '⚐', label: 'Goals' },
   ];
   return (
     <View style={styles.navWrap}>
@@ -1070,7 +2309,7 @@ const styles = StyleSheet.create({
   retryText: { color: '#A23B3B', fontSize: 10, textAlign: 'center', marginTop: 4 },
   loadingState: { minHeight: 240, alignItems: 'center', justifyContent: 'center' },
   loadingText: { color: C.muted, marginTop: 12, fontSize: 13 },
-  segmentRow: { flexDirection: 'row', gap: 8, marginBottom: 24 },
+  segmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 24 },
   segment: {
     minWidth: 82,
     height: 50,

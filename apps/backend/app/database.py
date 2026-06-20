@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import text
@@ -9,9 +10,14 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Determine database URL dynamically to isolate tests from active development database
+db_url = settings.database_url
+if os.environ.get("PYTEST_CURRENT_TEST"):
+    db_url = "sqlite+aiosqlite:///./test_baby_tracker.db"
+
 # Default engine and sessionmaker
 engine = create_async_engine(
-    settings.database_url,
+    db_url,
     echo=settings.environment == "development",
 )
 
@@ -43,12 +49,12 @@ async def verify_and_setup_db() -> None:
     global engine, async_session
     sqlite_fallback = False
 
-    if "postgresql" in settings.database_url:
+    if "postgresql" in db_url:
         try:
             logger.info("Attempting to connect to PostgreSQL...")
             # Create a temporary connection to verify
             temp_engine = create_async_engine(
-                settings.database_url,
+                db_url,
                 connect_args={"timeout": 3},  # short timeout for quick fallback
             )
             async with temp_engine.connect() as conn:
@@ -61,8 +67,9 @@ async def verify_and_setup_db() -> None:
             )
             sqlite_fallback = True
 
-    if sqlite_fallback or "sqlite" in settings.database_url:
-        fallback_url = "sqlite+aiosqlite:///./baby_tracker.db"
+    if sqlite_fallback or "sqlite" in db_url:
+        db_name = "test_baby_tracker.db" if os.environ.get("PYTEST_CURRENT_TEST") else "baby_tracker.db"
+        fallback_url = f"sqlite+aiosqlite:///./{db_name}"
         engine = create_async_engine(
             fallback_url,
             connect_args={"check_same_thread": False},
@@ -78,5 +85,11 @@ async def verify_and_setup_db() -> None:
     # Auto-create all tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safely attempt to add breast_side column to feedings table in case of an existing DB
+        try:
+            await conn.execute(text("ALTER TABLE feedings ADD COLUMN breast_side VARCHAR(20)"))
+        except Exception:
+            pass
     logger.info("Database schema initialized (tables created).")
+
 

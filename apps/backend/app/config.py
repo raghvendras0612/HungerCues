@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # Gemini AI Service
     gemini_api_key: str = ""
 
+    # Notification Scheduler
+    notification_test_mode: bool = False
 
     # App
     environment: str = "development"
