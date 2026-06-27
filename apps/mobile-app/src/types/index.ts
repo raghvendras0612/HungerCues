@@ -1,3 +1,5 @@
+// ─── Domain Models ────────────────────────────────────────────────────────────
+
 export interface Baby {
   id: number;
   name: string;
@@ -47,13 +49,6 @@ export interface GrowthRecord {
   deleted_at?: string | null;
 }
 
-export interface AIInsight {
-  summary: string;
-  feeding_insights: string;
-  sleep_insights: string;
-  recommendations: string[];
-}
-
 export interface Milestone {
   id: number;
   baby_id: number;
@@ -70,6 +65,15 @@ export interface NotificationEntry {
   type: string;
 }
 
+// ─── AI Response Models ───────────────────────────────────────────────────────
+
+export interface AIInsight {
+  summary: string;
+  feeding_insights: string;
+  sleep_insights: string;
+  recommendations: string[];
+}
+
 export interface AIWeeklySummary {
   summary: string;
   feeding_insights: string;
@@ -78,9 +82,12 @@ export interface AIWeeklySummary {
   recommendations: string[];
 }
 
+// ─── UI / Navigation Types ────────────────────────────────────────────────────
+
 export type Tab = 'home' | 'log' | 'history' | 'insights' | 'milestones' | 'growth';
 export type Activity = 'feed' | 'sleep' | 'diaper' | 'growth';
 export type FeedType = 'Breast' | 'Bottle' | 'Solid';
+
 export interface TimelineEvent {
   id: string;
   kind: Activity;

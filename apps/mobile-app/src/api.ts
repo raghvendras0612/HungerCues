@@ -1,7 +1,12 @@
 /**
- * api.ts — Backwards-compatible re-export barrel.
- * All network logic now lives in src/services/*.
- * This file remains for compatibility and as a single import point.
+ * api.ts — Aggregate service barrel.
+ * All network logic lives in src/services/*.
+ * All domain types live in src/types/index.ts.
+ *
+ * Feature files should import directly from the relevant service:
+ *   import { feedingService } from '../services/feedingService';
+ *
+ * App.tsx uses the `api` aggregate object for convenience.
  */
 import { babyService } from './services/babyService';
 import { feedingService } from './services/feedingService';
@@ -11,18 +16,6 @@ import { growthService } from './services/growthService';
 import { milestoneService } from './services/milestoneService';
 import { aiService } from './services/aiService';
 import { notificationService } from './services/notificationService';
-
-export type {
-  Baby,
-  Feeding,
-  SleepSession,
-  DiaperChange,
-  GrowthRecord,
-  AIInsight,
-  Milestone,
-  NotificationEntry,
-  AIWeeklySummary,
-} from './types';
 
 export { API_BASE_URL } from './services/apiClient';
 export { babyService } from './services/babyService';
@@ -34,7 +27,7 @@ export { milestoneService } from './services/milestoneService';
 export { aiService } from './services/aiService';
 export { notificationService } from './services/notificationService';
 
-// Legacy aggregate `api` object — App.tsx continues to use this until screen extraction
+/** Aggregate for App.tsx — do not use in feature files. */
 export const api = {
   ...babyService,
   ...feedingService,
